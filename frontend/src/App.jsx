@@ -1,20 +1,17 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
-import Chat from './Chat.jsx';
-import Home from './Home.jsx';
-import Login from './Login.jsx';
-import Settings from './settings.jsx';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import Login from './Login';
+import Chat from './Chat'; // Replace with your actual Chat component
 
-export default function App() {
+function App() {
   return (
-    <Router>
+    <BrowserRouter>
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/home" element={<Home />} />
         <Route path="/chat" element={<Chat />} />
-        <Route path="/settings" element={<Settings />} />
-        <Route path="*" element={<div>404 - Không tìm thấy trang</div>} />
       </Routes>
-    </Router>
+    </BrowserRouter>
   );
 }
+
+export default App;
