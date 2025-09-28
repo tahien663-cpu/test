@@ -36,16 +36,16 @@ class ApiService {
     };
 
     for (let attempt = 1; attempt <= retries; attempt++) {
-      let controller = new AbortController();
-      let timeout;
+      const controller = new AbortController(); // Always create a new controller
+      let timeoutId;
 
       try {
-        timeout = setTimeout(() => {
+        timeoutId = setTimeout(() => {
           controller.abort();
         }, options.timeoutMs || DEFAULT_TIMEOUT_MS);
 
         const response = await fetch(url, { ...config, signal: controller.signal });
-        clearTimeout(timeout);
+        clearTimeout(timeoutId);
 
         const text = await response.text();
 
@@ -76,7 +76,7 @@ class ApiService {
         }
       } catch (error) {
         console.error(`API Error [${endpoint}] (Attempt ${attempt}/${retries}):`, error.message);
-        clearTimeout(timeout);
+        clearTimeout(timeoutId);
 
         if (error.name === 'AbortError') {
           error = new Error('Yêu cầu quá thời gian, vui lòng thử lại');
@@ -84,6 +84,7 @@ class ApiService {
 
         if (attempt < retries) {
           console.log(`Retrying ${attempt + 1}/${retries} for ${endpoint}`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
           continue;
         }
 
