@@ -1,6 +1,6 @@
 // src/services/api.js
 const API_BASE_URL = 'https://test-d9o3.onrender.com/api';
-const DEFAULT_TIMEOUT_MS = 12000;
+const DEFAULT_TIMEOUT_MS = 30000; // Increased to 30 seconds for image generation
 
 console.log('API_BASE_URL:', API_BASE_URL);
 
@@ -43,9 +43,10 @@ class ApiService {
 
       try {
         console.log(`Attempt ${attempt}/${retries} for ${url}`);
+        const timeout = options.timeoutMs || DEFAULT_TIMEOUT_MS;
         timeoutId = setTimeout(() => {
           controller.abort();
-        }, options.timeoutMs || DEFAULT_TIMEOUT_MS);
+        }, timeout);
 
         const response = await fetch(url, config);
         clearTimeout(timeoutId);
@@ -82,7 +83,13 @@ class ApiService {
         clearTimeout(timeoutId);
 
         if (error.name === 'AbortError') {
-          error = new Error('Yêu cầu quá thời gian, vui lòng thử lại');
+          if (attempt < retries) {
+            console.log(`Timeout, retrying ${attempt + 1}/${retries} for ${endpoint}`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+            continue;
+          } else {
+            error = new Error('Yêu cầu quá thời gian, vui lòng thử lại');
+          }
         }
 
         if (attempt < retries) {
@@ -140,6 +147,13 @@ class ApiService {
     return data;
   }
 
+  async sendMessage(chatId, message) {
+    return this.request(chatId ? `/chat/${chatId}` : '/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
+  }
+
   async getChatHistory() {
     return this.request('/chat/history', { method: 'GET' });
   }
@@ -156,6 +170,7 @@ class ApiService {
     return this.request('/generate-image', {
       method: 'POST',
       body: JSON.stringify(options),
+      timeoutMs: 60000 // 60 seconds specifically for image generation
     });
   }
 }
