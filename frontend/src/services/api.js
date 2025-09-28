@@ -32,19 +32,23 @@ class ApiService {
     const url = `${this.baseURL}${endpoint}`;
     const config = {
       headers: this.getHeaders(options.includeAuth !== false),
-      ...options,
+      method: options.method || 'GET',
+      body: options.body || null,
+      signal: null, // Initialize signal as null
     };
 
     for (let attempt = 1; attempt <= retries; attempt++) {
-      const controller = new AbortController(); // Always create a new controller
+      const controller = new AbortController(); // Fresh controller for each attempt
+      config.signal = controller.signal; // Set signal in config
       let timeoutId;
 
       try {
+        console.log(`Attempt ${attempt}/${retries} for ${url}`);
         timeoutId = setTimeout(() => {
           controller.abort();
         }, options.timeoutMs || DEFAULT_TIMEOUT_MS);
 
-        const response = await fetch(url, { ...config, signal: controller.signal });
+        const response = await fetch(url, config);
         clearTimeout(timeoutId);
 
         const text = await response.text();
