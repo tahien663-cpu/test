@@ -1,3 +1,4 @@
+// src/components/Chat.jsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -6,6 +7,7 @@ import {
   Globe, StopCircle, RefreshCw, Image, ChevronDown
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
+import apiService from '../services/api';
 
 const ImageMessage = ({ src, alt, onLoad, onError }) => {
   const [isLoading, setIsLoading] = useState(true);
@@ -44,7 +46,7 @@ export default function Chat() {
     {
       id: 'welcome',
       role: 'ai',
-      content: 'Xin chào! Tôi là **Hein**! 😄',
+      content: 'Xin chào! Tôi là **Hein**! ! 😄',
       timestamp: new Date().toISOString()
     }
   ]);
@@ -109,24 +111,17 @@ export default function Chat() {
   }, []);
 
   // Retry API call with exponential backoff
-  const retryFetch = useCallback(async (url, options, maxRetries = 3, initialDelay = 1000) => {
+  const retryFetch = useCallback(async (fn, maxRetries = 3, initialDelay = 1000) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        abortControllerRef.current = new AbortController();
-        options.signal = abortControllerRef.current.signal;
-        const response = await fetch(url, options);
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `HTTP ${response.status}`);
-        }
-        return response;
+        return await fn();
       } catch (err) {
         if (err.name === 'AbortError') {
           console.log('Yêu cầu bị hủy');
           return null;
         }
         if (attempt === maxRetries) throw err;
-        console.warn(`Retry ${attempt}/${maxRetries} for ${url}: ${err.message}`);
+        console.warn(`Retry ${attempt}/${maxRetries}: ${err.message}`);
         await new Promise(resolve => setTimeout(resolve, initialDelay * Math.pow(2, attempt - 1)));
       }
     }
@@ -149,545 +144,131 @@ export default function Chat() {
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
         .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
         .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-        .replace(/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
+        .replace/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>'
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
-        .replace(/^### (.*$)/gim, '<h3 class="text-lg font-semibold mt-4 mb-2">$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2 class="text-xl font-semibold mt-4 mb-2">$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1 class="text-2xl font-bold mt-4 mb-2">$1</h1>')
-        .replace(/^\* (.*)$/gim, '<li class="ml-4">• $1</li>')
-        .replace(/^- (.*)$/gim, '<li class="ml-4">• $1</li>')
-        .replace(/^\d+\. (.*)$/gim, '<li class="ml-4 list-decimal">$1</li>')
-        .replace(/^> (.*)$/gim, '<blockquote class="border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic my-2">$1</blockquote>');
-      return html;
+        .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
+          const tag = `h${level.length}`;
+          return `<${tag} class="font-bold mt-4 mb-2 text-${6 - level.length + 1}xl">${content}</${tag}>`;
+        })
+        .replace(/^- \s*(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
+        .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
+        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
+
+      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
     } catch (err) {
-      console.error('Markdown parse error:', err.message);
-      return text;
+      console.error('Markdown parse error:', err);
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
   }, []);
 
-  // Format message content
-  const formatMessageContent = useCallback((content, role) => {
-    if (!content) return '';
-    if (role === 'ai' && content.includes('<img')) {
-      const imgMatch = content.match(/<img\s+src="([^"]+)"\s+alt="([^"]+)"\s*\/?>/i);
-      if (imgMatch) {
-        return <ImageMessage src={imgMatch[1]} alt={imgMatch[2]} />;
+  // Load chat history
+  const loadChatHistory = useCallback(async () => {
+    try {
+      const data = await apiService.getChatHistory();
+      setChatHistory(data.history || []);
+      if (data.history.length > 0 && !currentChatId) {
+        setCurrentChatId(data.history[0].id);
+      }
+    } catch (err) {
+      console.error('Load history error:', err.message);
+      if (err.message.includes('401') || err.message.includes('403')) {
+        localStorage.removeItem('token');
+        navigate('/login');
       }
     }
-    return parseMarkdown(content);
-  }, [parseMarkdown]);
+  }, [navigate]);
 
-  // Insert markdown formatting
-  const insertMarkdown = useCallback((before, after = '') => {
+  useEffect(() => {
+    loadChatHistory();
+  }, [loadChatHistory]);
+
+  // Load specific chat from history
+  const loadChat = useCallback((id) => {
+    const selectedChat = chatHistory.find(chat => chat.id === id);
+    if (selectedChat) {
+      setMessages(selectedChat.messages || []);
+      setCurrentChatId(id);
+    }
+  }, [chatHistory]);
+
+  useEffect(() => {
+    if (currentChatId) {
+      loadChat(currentChatId);
+    }
+  }, [currentChatId, loadChat, chatHistory]);
+
+  // Format timestamp
+  const formatTimestamp = useMemo(() => (timestamp) => {
+    const date = new Date(timestamp);
+    const today = new Date();
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+
+    if (date.toDateString() === today.toDateString()) {
+      return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    } else if (date.toDateString() === yesterday.toDateString()) {
+      return 'Hôm qua ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    } else {
+      return date.toLocaleDateString('vi-VN') + ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+    }
+  }, []);
+
+  // Group chat history by date
+  const groupedHistory = useMemo(() => {
+    const groups = {};
+    chatHistory.forEach(chat => {
+      const date = new Date(chat.timestamp).toDateString();
+      if (!groups[date]) groups[date] = [];
+      groups[date].push(chat);
+    });
+    return groups;
+  }, [chatHistory]);
+
+  // Insert formatting
+  const insertFormatting = useCallback((formatType) => {
     const textarea = inputRef.current;
     if (!textarea) return;
 
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
-    const text = textarea.value;
-    const selectedText = text.substring(start, end);
-    
-    const newText = text.substring(0, start) + before + selectedText + after + text.substring(end);
-    setInput(newText);
-    
+    const selectedText = input.substring(start, end);
+    let newText;
+    let newCursorPos;
+
+    switch (formatType) {
+      case 'bold':
+        newText = `**${selectedText || 'text'}**`;
+        newCursorPos = start + 2 + (selectedText ? selectedText.length : 4);
+        break;
+      case 'italic':
+        newText = `_${selectedText || 'text'}_`;
+        newCursorPos = start + 1 + (selectedText ? selectedText.length : 4);
+        break;
+      case 'code':
+        newText = `\`${selectedText || 'code'}\``;
+        newCursorPos = start + 1 + (selectedText ? selectedText.length : 4);
+        break;
+      default:
+        return;
+    }
+
+    setInput(input.substring(0, start) + newText + input.substring(end));
     setTimeout(() => {
-      const newPosition = start + before.length + selectedText.length;
       textarea.focus();
-      textarea.setSelectionRange(newPosition, newPosition);
+      textarea.selectionStart = textarea.selectionEnd = newCursorPos;
     }, 0);
-  }, []);
+  }, [input]);
 
-  const insertBold = useCallback(() => insertMarkdown('**', '**'), [insertMarkdown]);
-  const insertItalic = useCallback(() => insertMarkdown('*', '*'), [insertMarkdown]);
-  const insertCode = useCallback(() => insertMarkdown('`', '`'), [insertMarkdown]);
+  const insertBold = () => insertFormatting('bold');
+  const insertItalic = () => insertFormatting('italic');
+  const insertCode = () => insertFormatting('code');
 
-  // User initials
-  const userInitials = useMemo(() => {
-    return (userName || 'U')
-      .split(' ')
-      .filter(Boolean)
-      .map(n => n[0])
-      .slice(0, 2)
-      .join('')
-      .toUpperCase();
-  }, [userName]);
-
-  // Generate message ID
-  const generateMessageId = useCallback(() => {
-    return `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }, []);
-
-  // Format timestamp
-  const formatTime = useCallback((timestamp) => {
-    try {
-      const now = new Date();
-      const time = new Date(timestamp);
-      if (isNaN(time.getTime())) return 'Vừa xong';
-      
-      const diffInHours = (now - time) / (1000 * 60 * 60);
-      if (diffInHours < 24) {
-        return time.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-      } else if (diffInHours < 48) {
-        return 'Hôm qua';
-      } else {
-        return time.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
-      }
-    } catch (error) {
-      console.error('Error formatting time:', error);
-      return 'Vừa xong';
-    }
-  }, []);
-
-  // Auto scroll to bottom
-  useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [messages]);
-
-  // Theme management
-  useEffect(() => {
-    try {
-      localStorage.setItem('theme', theme);
-      document.documentElement.classList.toggle('dark', theme === 'dark');
-    } catch (error) {
-      console.error('Error saving theme:', error);
-    }
-  }, [theme]);
-
-  // Load chat history
-  useEffect(() => {
-    const fetchChatHistory = async () => {
-      let token;
-      try {
-        token = localStorage.getItem('token');
-      } catch (error) {
-        console.error('Error accessing token:', error);
-        navigate('/login');
-        return;
-      }
-
-      if (!token) {
-        navigate('/login');
-        return;
-      }
-
-      try {
-        const response = await retryFetch('/api/chat/history', {
-          headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!response) return;
-
-        let data;
-        try {
-          data = await response.json();
-        } catch (jsonError) {
-          console.error('JSON parse error in fetchChatHistory:', jsonError);
-          return;
-        }
-
-        if (response.status === 403 || response.status === 401) {
-          alert('Token hết hạn, đăng nhập lại nhé!');
-          localStorage.removeItem('token');
-          navigate('/login');
-          return;
-        }
-
-        if (!response.ok) {
-          console.error('Fetch history error:', data);
-          throw new Error(data.error || 'Lỗi tải lịch sử chat');
-        }
-
-        setChatHistory((data.history || []).map(chat => ({
-          ...chat,
-          isActive: false
-        })));
-      } catch (err) {
-        console.error('Load history error:', err.message);
-      }
-    };
-    fetchChatHistory();
-  }, [navigate, retryFetch]);
-
-  // Load selected chat messages
-  useEffect(() => {
-    if (currentChatId && chatHistory.length > 0) {
-      const chat = chatHistory.find(c => c.id === currentChatId);
-      if (chat && chat.messages && chat.messages.length > 0) {
-        setMessages(chat.messages);
-      } else {
-        setMessages([
-          {
-            id: `welcome-${currentChatId}`,
-            role: 'ai',
-            content: 'Tiếp tục cuộc trò chuyện này nhé! 😎',
-            timestamp: new Date().toISOString()
-          }
-        ]);
-      }
-    }
-  }, [currentChatId, chatHistory]);
-
-  // Generic API call handler
-  const handleApiCall = useCallback(async (endpoint, payload, userMessageContent = '') => {
-    let token;
-    try {
-      token = localStorage.getItem('token');
-    } catch (error) {
-      console.error('Error accessing token:', error);
-      alert('Lỗi truy cập token, vui lòng đăng nhập lại!');
-      navigate('/login');
-      return;
-    }
-
-    if (!token) {
-      alert('Token hết hạn, vui lòng đăng nhập lại!');
-      navigate('/login');
-      return;
-    }
-
-    const userMessage = userMessageContent ? { 
-      id: generateMessageId(),
-      role: 'user', 
-      content: userMessageContent, 
-      timestamp: new Date().toISOString() 
-    } : null;
-
-    if (userMessage) {
-      setMessages(prev => [...prev, userMessage]);
-    }
-    setInput('');
-    setIsLoading(true);
-    setShowActionDropdown(false);
-
-    try {
-      const recentMessages = userMessage ? 
-        [...messages, userMessage].slice(-20) : 
-        [...messages].slice(-20);
-      
-      const requestPayload = {
-        messages: recentMessages,
-        chatId: currentChatId,
-        ...payload
-      };
-      
-      const response = await retryFetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify(requestPayload),
-      });
-
-      if (!response) {
-        setMessages(prev => [...prev, {
-          id: generateMessageId(),
-          role: 'ai',
-          content: 'Yêu cầu bị hủy. 😊',
-          timestamp: new Date().toISOString()
-        }]);
-        return;
-      }
-
-      let data;
-      try {
-        data = await response.json();
-      } catch (jsonError) {
-        console.error('JSON parse error:', jsonError);
-        throw new Error('Phản hồi từ server không hợp lệ. Vui lòng thử lại.');
-      }
-
-      if (response.status === 413) {
-        throw new Error('Nội dung quá lớn. Hãy thử với tin nhắn ngắn hơn.');
-      }
-
-      if (response.status === 403 || response.status === 401) {
-        alert('Token hết hạn, đăng nhập lại nhé!');
-        localStorage.removeItem('token');
-        navigate('/login');
-        return;
-      }
-
-      if (!response.ok) {
-        console.error('API error:', data);
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
-      const aiMessage = { 
-        id: data.messageId || generateMessageId(),
-        role: 'ai', 
-        content: data.message, 
-        timestamp: data.timestamp || new Date().toISOString()
-      };
-
-      setMessages(prev => [...prev, aiMessage]);
-      setCurrentChatId(data.chatId);
-
-      // Update chat history
-      setChatHistory(prev => {
-        const existingChatIndex = prev.findIndex(chat => chat.id === data.chatId);
-        const updatedMessages = userMessage ? 
-          [...messages, userMessage, aiMessage] : 
-          [...messages, aiMessage];
-        
-        const chatTitle = userMessage ? 
-          userMessage.content.slice(0, 50) + (userMessage.content.length > 50 ? '...' : '') :
-          'Cuộc trò chuyện';
-        
-        if (existingChatIndex !== -1) {
-          const updatedChats = [...prev];
-          updatedChats[existingChatIndex] = {
-            ...updatedChats[existingChatIndex],
-            lastMessage: data.message.slice(0, 50) + (data.message.length > 50 ? '...' : ''),
-            timestamp: data.timestamp || new Date().toISOString(),
-            messages: updatedMessages,
-            isActive: true
-          };
-          updatedChats.forEach((chat, index) => {
-            if (index !== existingChatIndex) chat.isActive = false;
-          });
-          return updatedChats;
-        } else {
-          const newChat = {
-            id: data.chatId,
-            title: chatTitle,
-            lastMessage: data.message.slice(0, 50) + (data.message.length > 50 ? '...' : ''),
-            timestamp: data.timestamp || new Date().toISOString(),
-            isActive: true,
-            messages: updatedMessages
-          };
-          return [newChat, ...prev.map(chat => ({ ...chat, isActive: false }))];
-        }
-      });
-    } catch (error) {
-      console.error('API Error:', error.message);
-      setMessages(prev => [...prev, {
-        id: generateMessageId(),
-        role: 'ai',
-        content: `**Ôi zời, lỗi rồi!** ${error.message}. Thử lại sau nhé? 😅`,
-        timestamp: new Date().toISOString()
-      }]);
-    } finally {
-      setIsLoading(false);
-      abortControllerRef.current = null;
-    }
-  }, [messages, currentChatId, generateMessageId, navigate, retryFetch]);
-
-  // Send message handler
-  const handleSendMessage = useCallback(async (retry = false) => {
-    const content = retry ? messages[messages.length - 1]?.content : input.trim();
-    if (!content || isLoading) return;
-
-    if (retry) {
-      setIsLoading(true);
-      await handleApiCall('/api/chat', {});
-    } else {
-      await handleApiCall('/api/chat', {}, content);
-    }
-  }, [input, isLoading, messages, handleApiCall]);
-
-  // Web search handler
-  const handleWebSearch = useCallback(async () => {
-    const content = input.trim();
-    if (!content || isLoading) return;
-    
-    const searchContent = content.startsWith('Search the web: ') ? content : `Search the web: ${content}`;
-    await handleApiCall('/api/chat', {}, searchContent);
-  }, [input, isLoading, handleApiCall]);
-
-  // Generate image handler
-  const handleGenerateImage = useCallback(async () => {
-    const prompt = input.trim();
-    if (!prompt || isLoading) return;
-    if (prompt.length > 500) {
-      alert('Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.');
-      return;
-    }
-
-    await handleApiCall('/api/generate-image', { prompt }, prompt);
-  }, [input, isLoading, handleApiCall]);
-
-  // Handle stop request
-  const handleStop = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsLoading(false);
-      setMessages(prev => [...prev, {
-        id: generateMessageId(),
-        role: 'ai',
-        content: 'Đã dừng yêu cầu. 😊',
-        timestamp: new Date().toISOString()
-      }]);
-    }
-  }, [generateMessageId]);
-
-  // Handle regenerate result
-  const handleRegenerate = useCallback(() => {
-    if (messages.length > 0 && !isLoading) {
-      handleSendMessage(true);
-    }
-  }, [messages, isLoading, handleSendMessage]);
-
-  // New chat handler
-  const handleNewChat = useCallback(() => {
-    let token;
-    try {
-      token = localStorage.getItem('token');
-    } catch (error) {
-      console.error('Error accessing token:', error);
-      navigate('/login');
-      return;
-    }
-
-    if (!token) {
-      navigate('/login');
-      return;
-    }
-
-    setCurrentChatId(null);
-    setMessages([
-      {
-        id: `new-chat-${Date.now()}`,
-        role: 'ai',
-        content: '**Cuộc trò chuyện mới!** Hỏi gì đi nào? 😄',
-        timestamp: new Date().toISOString()
-      }
-    ]);
-    setChatHistory(prev => prev.map(chat => ({ ...chat, isActive: false })));
-  }, [navigate]);
-
-  // Select chat handler
-  const handleSelectChat = useCallback((chatId) => {
-    setChatHistory(prev => prev.map(chat => ({ ...chat, isActive: chat.id === chatId })));
-    setCurrentChatId(chatId);
-  }, []);
-
-  // Delete chat handler
-  const handleDeleteChat = useCallback(async (chatId) => {
-    if (!confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
-
-    let token;
-    try {
-      token = localStorage.getItem('token');
-    } catch (error) {
-      console.error('Error accessing token:', error);
-      navigate('/login');
-      return;
-    }
-
-    if (!token) {
-      navigate('/login');
-      return;
-    }
-
-    try {
-      const response = await retryFetch(`/api/chat/${chatId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (!response) return;
-
-      if (response.status === 403 || response.status === 401) {
-        alert('Token hết hạn, đăng nhập lại nhé!');
-        localStorage.removeItem('token');
-        navigate('/login');
-        return;
-      }
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('Delete chat error:', errorData);
-        throw new Error(errorData.error || 'Lỗi xóa chat');
-      }
-
-      setChatHistory(prev => prev.filter(chat => chat.id !== chatId));
-      
-      if (chatId === currentChatId) {
-        setCurrentChatId(null);
-        setMessages([
-          {
-            id: `deleted-${Date.now()}`,
-            role: 'ai',
-            content: '**Chat đã xóa!** Tạo cuộc trò chuyện mới nhé? 😄',
-            timestamp: new Date().toISOString()
-          }
-        ]);
-      }
-    } catch (err) {
-      console.error('Delete chat error:', err.message);
-      alert('Lỗi xóa chat, thử lại nhé!');
-    }
-  }, [currentChatId, navigate, retryFetch]);
-
-  // Delete message handler
-  const handleDeleteMessage = useCallback(async (messageId) => {
-    if (messageId.startsWith('welcome') || messageId.startsWith('new-chat') || messageId.startsWith('deleted')) return;
-    if (!confirm('Bạn có chắc muốn xóa tin nhắn này?')) return;
-
-    let token;
-    try {
-      token = localStorage.getItem('token');
-    } catch (error) {
-      console.error('Error accessing token:', error);
-      navigate('/login');
-      return;
-    }
-
-    if (!token) {
-      navigate('/login');
-      return;
-    }
-
-    try {
-      const response = await retryFetch(`/api/message/${messageId}`, {
-        method: 'DELETE',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-
-      if (!response) return;
-
-      if (response.status === 403 || response.status === 401) {
-        alert('Token hết hạn, đăng nhập lại nhé!');
-        localStorage.removeItem('token');
-        navigate('/login');
-        return;
-      }
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('Delete message error:', errorData);
-        throw new Error(errorData.error || 'Lỗi xóa tin nhắn');
-      }
-
-      setMessages(prev => prev.filter(msg => msg.id !== messageId));
-    } catch (err) {
-      console.error('Delete message error:', err.message);
-      alert('Lỗi xóa tin nhắn, thử lại nhé!');
-    }
-  }, [navigate, retryFetch]);
-
-  // Filtered chats
-  const filteredChats = useMemo(() => {
-    return chatHistory.filter(chat => 
-      (chat.title && chat.title.toLowerCase().includes(searchTerm.toLowerCase())) ||
-      (chat.lastMessage && chat.lastMessage.toLowerCase().includes(searchTerm.toLowerCase()))
-    );
-  }, [chatHistory, searchTerm]);
-
-  // Input keydown handler
+  // Handle keydown for formatting shortcuts
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-    
-    if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
-      switch (e.key) {
+    if (e.ctrlKey || e.metaKey) {
+      switch (e.key.toLowerCase()) {
         case 'b':
           e.preventDefault();
           insertBold();
@@ -704,184 +285,338 @@ export default function Chat() {
           break;
       }
     }
-  }, [handleSendMessage, isLoading, insertBold, insertItalic, insertCode]);
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  }, [isLoading]);
 
-  const goToHome = useCallback(() => navigate('/home'), [navigate]);
-  const toggleTheme = useCallback(() => setTheme(prev => prev === 'light' ? 'dark' : 'light'), []);
-  const toggleSidebar = useCallback(() => setSidebarOpen(prev => !prev), []);
+  // Stop generation
+  const stopGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsLoading(false);
+      abortControllerRef.current = null;
+    }
+  }, []);
+
+  // Handle send message
+  const handleSendMessage = useCallback(async (options = {}) => {
+    if (!input.trim() || isLoading) return;
+    if (input.length > 500) {
+      setMessage({ text: 'Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.', type: 'error' });
+      return;
+    }
+
+    const userMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: input,
+      timestamp: new Date().toISOString()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+    setShowActionDropdown(false);
+
+    try {
+      const formattedMessages = messages.map(m => ({
+        role: m.role === 'ai' ? 'assistant' : m.role,
+        content: m.content
+      })).concat({ role: 'user', content: input });
+
+      const data = await retryFetch(() => apiService.sendMessage(currentChatId, formattedMessages));
+      const aiMessage = {
+        id: data.messageId || Date.now().toString(),
+        role: 'ai',
+        content: data.message,
+        timestamp: data.timestamp || new Date().toISOString()
+      };
+      setMessages(prev => [...prev, aiMessage]);
+      if (data.chatId && !currentChatId) {
+        setCurrentChatId(data.chatId);
+      }
+      await loadChatHistory();
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Send message error:', err.message);
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'ai',
+          content: '**Ôi zời, lỗi rồi!** . Thử lại sau nhé? 😅',
+          timestamp: new Date().toISOString()
+        }]);
+        if (err.message.includes('401') || err.message.includes('403')) {
+          localStorage.removeItem('token');
+          navigate('/login');
+        }
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [input, isLoading, currentChatId, messages, retryFetch, loadChatHistory, navigate]);
+
+  // Handle web search - prepend to prompt to trigger tool
+  const handleWebSearch = useCallback(async () => {
+    if (!input.trim() || isLoading) return;
+    setShowActionDropdown(false);
+    const searchPrompt = `Tìm kiếm web: ${input}`;
+    setInput(searchPrompt);
+    await handleSendMessage();
+  }, [input, isLoading, handleSendMessage]);
+
+  // Handle generate image
+  const handleGenerateImage = useCallback(async () => {
+    if (!input.trim() || isLoading) return;
+    setShowActionDropdown(false);
+
+    const userMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: `Tạo ảnh: ${input}`,
+      timestamp: new Date().toISOString()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    try {
+      const data = await retryFetch(() => apiService.generateImage({ prompt: input, chatId: currentChatId }));
+      const aiMessage = {
+        id: data.messageId || Date.now().toString(),
+        role: 'ai',
+        content: data.message,
+        timestamp: data.timestamp || new Date().toISOString()
+      };
+      setMessages(prev => [...prev, aiMessage]);
+      if (data.chatId && !currentChatId) {
+        setCurrentChatId(data.chatId);
+      }
+      await loadChatHistory();
+    } catch (err) {
+      console.error('Generate image error:', err.message);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'ai',
+        content: '**Ôi zời, lỗi tạo ảnh rồi!** Thử lại sau nhé? 😅',
+        timestamp: new Date().toISOString()
+      }]);
+      if (err.message.includes('401') || err.message.includes('403')) {
+        localStorage.removeItem('token');
+        navigate('/login');
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, [input, isLoading, currentChatId, retryFetch, loadChatHistory, navigate]);
+
+  // Delete chat
+  const deleteChat = useCallback(async (id) => {
+    if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
+
+    try {
+      await apiService.deleteChat(id);
+      setChatHistory(prev => prev.filter(chat => chat.id !== id));
+      if (currentChatId === id) {
+        setCurrentChatId(null);
+        setMessages([messages[0]]); // Reset to welcome message
+      }
+    } catch (err) {
+      console.error('Delete chat error:', err.message);
+    }
+  }, [currentChatId, messages]);
+
+  // Delete message
+  const deleteMessage = useCallback(async (messageId) => {
+    try {
+      await apiService.deleteMessage(messageId);
+      setMessages(prev => prev.filter(msg => msg.id !== messageId));
+      await loadChatHistory(); // Refresh history
+    } catch (err) {
+      console.error('Delete message error:', err.message);
+    }
+  }, [loadChatHistory]);
+
+  // New chat
+  const newChat = useCallback(() => {
+    setCurrentChatId(null);
+    setMessages([messages[0]]);
+  }, [messages]);
+
+  // Toggle theme
+  const toggleTheme = useCallback(() => {
+    const newTheme = theme === 'light' ? 'dark' : 'light';
+    setTheme(newTheme);
+    localStorage.setItem('theme', newTheme);
+    document.documentElement.classList.toggle('dark', newTheme === 'dark');
+  }, [theme]);
+
+  // Scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // Theme effect
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
 
   return (
-    <div className={`flex h-screen ${theme === 'light' ? 'bg-gray-50 text-gray-900' : 'bg-gray-900 text-white'}`}>
+    <div className={`min-h-screen flex ${theme === 'light' ? 'bg-gray-50' : 'bg-gray-900'} text-gray-900 dark:text-white transition-colors duration-300`}>
       {/* Sidebar */}
-      <div className={`${sidebarOpen ? 'w-80' : 'w-0'} transition-all duration-300 ${theme === 'light' ? 'bg-white border-gray-200 text-gray-900' : 'bg-gray-800 border-gray-700 text-white'} border-r flex flex-col overflow-hidden`}>
-        <div className={`p-4 border-b ${theme === 'light' ? 'border-gray-200' : 'border-gray-700'}`}>
-          <button
-            onClick={goToHome}
-            className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors mb-3 ${theme === 'light' ? 'hover:bg-gray-100' : 'hover:bg-gray-700'}`}
-          >
-            <Home className="w-5 h-5" />
-            <span>Trang chủ</span>
-          </button>
-          <button
-            onClick={handleNewChat}
-            className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
-          >
-            <Plus className="w-5 h-5" />
-            <span>Cuộc trò chuyện mới</span>
-          </button>
-        </div>
-
-        <div className="p-4">
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-            <input
-              type="text"
-              placeholder="Tìm kiếm..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className={`w-full pl-10 pr-4 py-2 rounded-lg border ${theme === 'light' ? 'bg-gray-100 border-gray-300' : 'bg-gray-700 border-gray-600 text-white'}`}
-            />
+      <div className={`fixed inset-y-0 left-0 z-30 w-64 transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${theme === 'light' ? 'bg-white border-r border-gray-200' : 'bg-gray-800 border-r border-gray-700'}`}>
+        <div className="flex h-full flex-col">
+          {/* Sidebar Header */}
+          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+            <h2 className="text-xl font-bold">Lịch sử chat</h2>
+            <button onClick={newChat} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
+              <Plus className="w-5 h-5" />
+            </button>
           </div>
-        </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-2">
-          {filteredChats.map((chat) => (
-            <div
-              key={chat.id}
-              className={`p-3 rounded-lg cursor-pointer relative group ${chat.isActive ? (theme === 'light' ? 'bg-blue-100 text-blue-900' : 'bg-blue-900 text-blue-200') : (theme === 'light' ? 'hover:bg-gray-100' : 'hover:bg-gray-700')}`}
-              onClick={() => handleSelectChat(chat.id)}
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <MessageSquare className="w-5 h-5 flex-shrink-0" />
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium truncate">{chat.title || 'Cuộc trò chuyện'}</p>
-                    <p className="text-sm text-gray-500 truncate">{chat.lastMessage || 'Không có tin nhắn'}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <span className="text-xs text-gray-500">{formatTime(chat.timestamp)}</span>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDeleteChat(chat.id);
-                    }}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-500/20"
+          {/* Search */}
+          <div className="p-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Tìm kiếm chat..."
+                className={`w-full pl-10 pr-4 py-2 rounded-lg ${theme === 'light' ? 'bg-gray-100 border-gray-200 text-gray-900 placeholder-gray-500' : 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'} border focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors`}
+              />
+            </div>
+          </div>
+
+          {/* Chat History */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {Object.entries(groupedHistory).map(([date, chats]) => (
+              <div key={date}>
+                <h3 className="text-sm font-semibold mb-2 text-gray-500 dark:text-gray-400">
+                  {new Date(date).toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                </h3>
+                {chats.filter(chat => chat.title.toLowerCase().includes(searchTerm.toLowerCase())).map(chat => (
+                  <div 
+                    key={chat.id}
+                    className={`p-3 rounded-lg cursor-pointer relative group ${currentChatId === chat.id ? 'bg-blue-100 dark:bg-blue-900/30' : ''} ${theme === 'light' ? 'hover:bg-gray-100' : 'hover:bg-gray-700'} transition-colors`}
+                    onClick={() => loadChat(chat.id)}
                   >
-                    <Trash2 className="w-4 h-4 text-red-500" />
-                  </button>
-                </div>
+                    <div className="flex justify-between items-start">
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{chat.title || 'Cuộc trò chuyện mới'}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{chat.last_message}</p>
+                      </div>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteChat(chat.id);
+                        }}
+                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-500/20"
+                      >
+                        <Trash2 className="w-4 h-4 text-red-500" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
 
-        <div className={`p-4 border-t ${theme === 'light' ? 'border-gray-200' : 'border-gray-700'}`}>
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-medium ${theme === 'light' ? 'bg-blue-100 text-blue-700' : 'bg-blue-900 text-blue-200'}`}>
-              {userInitials}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="font-medium truncate">{userName}</p>
-              <p className="text-sm text-gray-500">Cá nhân</p>
-            </div>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => navigate('/settings')}
-                className={`p-2 rounded transition-colors ${theme === 'light' ? 'hover:bg-gray-200' : 'hover:bg-gray-700'}`}
-              >
-                <Settings className="w-5 h-5" />
-              </button>
-              <button
-                onClick={toggleTheme}
-                className={`p-2 rounded transition-colors ${theme === 'light' ? 'hover:bg-gray-200' : 'hover:bg-gray-700'}`}
-              >
-                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-              </button>
-            </div>
+          {/* Sidebar Footer */}
+          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
+            <button 
+              onClick={() => navigate('/home')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'}`}
+            >
+              <Home className="w-5 h-5" />
+              Trang chủ
+            </button>
+            <button 
+              onClick={() => navigate('/settings')}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'}`}
+            >
+              <Settings className="w-5 h-5" />
+              Cài đặt
+            </button>
+            <button 
+              onClick={toggleTheme}
+              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'}`}
+            >
+              {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+              {theme === 'light' ? 'Chế độ tối' : 'Chế độ sáng'}
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Main Chat Area */}
-      <div className="flex-1 flex flex-col">
-        {/* Header */}
-        <div className={`p-4 border-b ${theme === 'light' ? 'border-gray-200' : 'border-gray-700'} flex items-center justify-between`}>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={toggleSidebar}
-              className={`p-2 rounded transition-colors ${theme === 'light' ? 'hover:bg-gray-200' : 'hover:bg-gray-700'}`}
-            >
-              <Menu className="w-5 h-5" />
-            </button>
-            <h1 className="text-lg font-semibold">Hein AI</h1>
-          </div>
-          
-          {/* Control buttons for regenerate and stop */}
-          <div className="flex items-center gap-2">
-            {isLoading ? (
-              <button
-                onClick={handleStop}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-colors"
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Navbar */}
+        <nav className="fixed top-0 left-0 right-0 z-20 bg-gradient-to-r from-sky-500/70 to-indigo-600/70 backdrop-blur-md border-b border-white/10 shadow-xl px-4 py-3 md:px-6 lg:px-8">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="p-2 rounded-lg hover:bg-white/10 transition-colors md:hidden"
               >
-                <StopCircle className="w-4 h-4" />
-                <span className="text-sm">Dừng</span>
+                <Menu className="w-5 h-5 text-white" />
               </button>
-            ) : messages.length > 1 && (
-              <button
-                onClick={handleRegenerate}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-green-500 hover:bg-green-600 text-white transition-colors"
+              <h1 className="text-xl font-bold text-white">Chat Với AI</h1>
+            </div>
+            <div className="flex items-center gap-4">
+              <span className="text-white/80 hidden sm:block">{userName}</span>
+              <button 
+                onClick={() => {
+                  localStorage.clear();
+                  navigate('/login');
+                }}
+                className="px-4 py-2 rounded-lg bg-red-500/70 hover:bg-red-600/70 text-white font-semibold transition-colors"
               >
-                <RefreshCw className="w-4 h-4" />
-                <span className="text-sm">Tạo lại</span>
+                Đăng xuất
               </button>
-            )}
+            </div>
           </div>
-        </div>
+        </nav>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6" ref={messagesContainerRef}>
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 pt-20 pb-32">
           {messages.map((msg) => (
-            <div
+            <div 
               key={msg.id}
               className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              <div className={`max-w-3xl p-4 rounded-2xl relative group shadow-sm ${msg.role === 'user' ? (theme === 'light' ? 'bg-blue-500 text-white' : 'bg-blue-600 text-white') : (theme === 'light' ? 'bg-white text-gray-900 border border-gray-200' : 'bg-gray-800 text-white border border-gray-700')}`}>
-                <div className="flex items-start gap-3">
-                  {msg.role === 'ai' ? (
-                    <Bot className="w-5 h-5 mt-1 flex-shrink-0 text-blue-500" />
+              <div className={`max-w-[70%] p-4 rounded-2xl relative group ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'} shadow-sm`}>
+                <div className="flex items-center gap-3 mb-2">
+                  {msg.role === 'user' ? (
+                    <User className="w-5 h-5" />
                   ) : (
-                    <User className="w-5 h-5 mt-1 flex-shrink-0" />
+                    <Bot className="w-5 h-5 text-blue-500" />
                   )}
-                  <div className="min-w-0 flex-1">
-                    <p className="font-medium text-sm mb-1">{msg.role === 'user' ? userName : 'Hein AI'}</p>
-                    <div className="whitespace-pre-wrap break-words prose prose-sm max-w-none dark:prose-invert">
-                      {typeof formatMessageContent(msg.content, msg.role) === 'string' 
-                        ? <span dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(formatMessageContent(msg.content, msg.role), { 
-                            ADD_TAGS: ['img', 'button', 'div', 'pre', 'code'], 
-                            ADD_ATTR: ['src', 'alt', 'loading', 'class', 'data-code'] 
-                          }) }} />
-                        : formatMessageContent(msg.content, msg.role)
-                      }
-                    </div>
-                    <p className="text-xs opacity-70 mt-2">{formatTime(msg.timestamp)}</p>
-                  </div>
+                  <span className="font-medium">{msg.role === 'user' ? userName : 'Hein AI'}</span>
                 </div>
-                {msg.id && !msg.id.startsWith('welcome') && !msg.id.startsWith('new-chat') && !msg.id.startsWith('deleted') && (
-                  <button
-                    onClick={() => handleDeleteMessage(msg.id)}
-                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-full hover:bg-red-500/20"
-                    title="Xóa tin nhắn"
-                  >
-                    <Trash2 className="w-4 h-4 text-red-500" />
-                  </button>
-                )}
+                <div 
+                  className="prose prose-sm dark:prose-invert max-w-none"
+                  dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
+                />
+                <div className="flex justify-between items-center mt-2 text-xs opacity-70">
+                  <span>{formatTimestamp(msg.timestamp)}</span>
+                  {msg.role === 'user' && msg.id !== 'welcome' && (
+                    <button 
+                      onClick={() => deleteMessage(msg.id)}
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-500/20"
+                    >
+                      <Trash2 className="w-4 h-4 text-red-500" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
           {isLoading && (
             <div className="flex justify-start">
-              <div className={`p-4 rounded-2xl ${theme === 'light' ? 'bg-white text-gray-900 shadow-sm border border-gray-200' : 'bg-gray-800 text-white shadow-sm border border-gray-700'}`}>
+              <div className="max-w-[70%] p-4 rounded-2xl bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm">
                 <div className="flex items-center gap-3">
                   <Bot className="w-5 h-5 text-blue-500" />
                   <div className="flex items-center gap-2">
@@ -896,7 +631,7 @@ export default function Chat() {
         </div>
 
         {/* Input Area */}
-        <div className={`p-6 border-t ${theme === 'light' ? 'border-gray-200 bg-white' : 'border-gray-700 bg-gray-800'}`}>
+        <div className={`fixed bottom-0 left-0 right-0 p-6 border-t ${theme === 'light' ? 'border-gray-200 bg-white' : 'border-gray-700 bg-gray-800'} z-10 md:static md:border-0 md:p-6`}>
           <div className="max-w-4xl mx-auto">
             <div className="relative">
               <textarea
