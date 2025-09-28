@@ -735,7 +735,7 @@ export default function Chat() {
 
             {/* Shortcuts hint */}
             <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-              <span>Enter để gửi, Shift+Enter để xuống dòng</span>
+              <span>Enter để gửi, Shift+Enter để xuống dòng.</span>
               <span>Ctrl+B/I/` để định dạng</span>
             </div>
           </div>
@@ -743,4 +743,4 @@ export default function Chat() {
       </div>
     </div>
   );
-}
+}  
