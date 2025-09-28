@@ -12,7 +12,7 @@ const ImageMessage = ({ src, alt, onLoad, onError }) => {
   const [hasError, setHasError] = useState(false);
 
   return (
-    <div className="relative">
+    <div className="relative my-2">
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-lg">
           <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
@@ -33,7 +33,11 @@ const ImageMessage = ({ src, alt, onLoad, onError }) => {
         }}
         style={{ display: isLoading || hasError ? 'none' : 'block' }}
       />
-      {hasError && <p className="text-red-500 text-sm">Lỗi tải ảnh. 😔</p>}
+      {hasError && (
+        <p className="text-red-500 text-sm">
+          Lỗi tải ảnh. <a href={src} target="_blank" rel="noopener noreferrer" className="underline">Xem ảnh</a>
+        </p>
+      )}
     </div>
   );
 };
@@ -245,7 +249,6 @@ export default function Chat() {
     setShowActionDropdown(false);
 
     try {
-      // Send the full message history with the new user message
       const data = await apiService.request('/chat', {
         method: 'POST',
         body: JSON.stringify({
@@ -310,6 +313,7 @@ export default function Chat() {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
         content: data.message,
+        imageUrl: data.imageUrl, // Store imageUrl separately for rendering
         timestamp: data.timestamp || new Date().toISOString()
       };
       setMessages(prev => [...prev, aiMessage]);
@@ -322,7 +326,7 @@ export default function Chat() {
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'ai',
-        content: '**Ôi zời, lỗi tạo ảnh rồi!** Thử lại sau nhé? 😅',
+        content: `**Ôi zời, lỗi tạo ảnh rồi!** ${err.message} 😅`,
         timestamp: new Date().toISOString()
       }]);
       if (err.message.includes('401') || err.message.includes('403')) {
@@ -500,10 +504,19 @@ export default function Chat() {
                   )}
                   <span className="font-medium">{msg.role === 'user' ? userName : 'Hein AI'}</span>
                 </div>
-                <div 
-                  className="prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
-                />
+                {msg.imageUrl ? (
+                  <ImageMessage
+                    src={msg.imageUrl}
+                    alt="Generated Image"
+                    onLoad={() => console.log('Image loaded:', msg.imageUrl)}
+                    onError={() => console.error('Image failed to load:', msg.imageUrl)}
+                  />
+                ) : (
+                  <div 
+                    className="prose prose-sm dark:prose-invert max-w-none"
+                    dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
+                  />
+                )}
                 <div className="flex justify-between items-center mt-2 text-xs opacity-70">
                   <span>{formatTimestamp(msg.timestamp)}</span>
                   {msg.role === 'user' && msg.id !== 'welcome' && (
@@ -651,17 +664,16 @@ export default function Chat() {
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
-        .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
-          const tag = `h${level.length}`;
-          return `<${tag} class="font-bold mt-4 mb-2 text-${6 - level.length + 1}xl">${content}</${tag}>`;
-        })
-        .replace(/^- \s*(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
-        .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
-        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
-      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
+          return `<img src="${DOMPurify.sanitize(src)}" alt="${DOMPurify.sanitize(alt)}" class="max-w-full rounded-lg my-2 shadow-lg" loading="lazy">`;
+        });
+      return DOMPurify.sanitize(html, { 
+        ADD_TAGS: ['img', 'iframe'], 
+        ADD_ATTR: ['src', 'alt', 'target', 'rel', 'loading', 'allowfullscreen']
+      });
     } catch (err) {
       console.error('Markdown parse error:', err);
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return DOMPurify.sanitize(text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
     }
   }
 }
