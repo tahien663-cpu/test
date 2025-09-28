@@ -34,12 +34,11 @@ class ApiService {
       headers: this.getHeaders(options.includeAuth !== false),
       method: options.method || 'GET',
       body: options.body || null,
-      signal: null, // Initialize signal as null
     };
 
     for (let attempt = 1; attempt <= retries; attempt++) {
-      const controller = new AbortController(); // Fresh controller for each attempt
-      config.signal = controller.signal; // Set signal in config
+      const controller = new AbortController();
+      config.signal = controller.signal;
       let timeoutId;
 
       try {
@@ -88,7 +87,7 @@ class ApiService {
 
         if (attempt < retries) {
           console.log(`Retrying ${attempt + 1}/${retries} for ${endpoint}`);
-          await new Promise(resolve => setTimeout(resolve, 1000 * attempt)); // Exponential backoff
+          await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
           continue;
         }
 
