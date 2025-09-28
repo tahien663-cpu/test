@@ -1,6 +1,6 @@
 // src/services/api.js
 const API_BASE_URL = 'https://test-d9o3.onrender.com/api';
-const DEFAULT_TIMEOUT_MS = 30000; // Increased to 30 seconds for image generation
+const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds for general requests
 
 console.log('API_BASE_URL:', API_BASE_URL);
 
@@ -88,7 +88,7 @@ class ApiService {
             await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
             continue;
           } else {
-            error = new Error('Yêu cầu quá thời gian, vui lòng thử lại');
+            throw new Error('Yêu cầu quá thời gian, vui lòng thử lại');
           }
         }
 
@@ -147,13 +147,6 @@ class ApiService {
     return data;
   }
 
-  async sendMessage(chatId, message) {
-    return this.request(chatId ? `/chat/${chatId}` : '/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message }),
-    });
-  }
-
   async getChatHistory() {
     return this.request('/chat/history', { method: 'GET' });
   }
@@ -170,7 +163,7 @@ class ApiService {
     return this.request('/generate-image', {
       method: 'POST',
       body: JSON.stringify(options),
-      timeoutMs: 60000 // 60 seconds specifically for image generation
+      timeoutMs: 60000 // 60 seconds for image generation
     });
   }
 }
