@@ -39,12 +39,12 @@ class ApiService {
       const response = await fetch(url, { ...config, signal: controller.signal });
       clearTimeout(timeout);
 
-      const text = await response.text(); // Get raw text first
+      const text = await response.text();
 
       if (!response.ok) {
         let data;
         try {
-          data = JSON.parse(text); // Try to parse as JSON
+          data = JSON.parse(text);
         } catch {
           throw new Error(`Server returned non-JSON: ${text || 'Empty response'} (Status: ${response.status})`);
         }
@@ -62,7 +62,7 @@ class ApiService {
       }
 
       try {
-        return JSON.parse(text); // Parse valid JSON
+        return JSON.parse(text);
       } catch {
         throw new Error('Invalid JSON response from server');
       }
@@ -75,7 +75,6 @@ class ApiService {
     }
   }
 
-  // Auth
   async login({ email, password }) {
     const data = await this.request('/login', {
       method: 'POST',
@@ -97,7 +96,6 @@ class ApiService {
     return data;
   }
 
-  // User
   async updateProfile({ name, email }) {
     const data = await this.request('/profile', {
       method: 'PUT',
@@ -121,7 +119,6 @@ class ApiService {
     return data;
   }
 
-  // Chat
   async sendMessage(chatId, message) {
     return this.request(chatId ? `/chat/${chatId}` : '/chat', {
       method: 'POST',
