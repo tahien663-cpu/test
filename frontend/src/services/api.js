@@ -140,13 +140,6 @@ class ApiService {
     return data;
   }
 
-  async sendMessage(chatId, message) {
-    return this.request(chatId ? `/chat/${chatId}` : '/chat', {
-      method: 'POST',
-      body: JSON.stringify({ message }),
-    });
-  }
-
   async getChatHistory() {
     return this.request('/chat/history', { method: 'GET' });
   }
