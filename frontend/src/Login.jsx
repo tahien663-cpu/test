@@ -1,7 +1,7 @@
-// src/components/Login.jsx
+// src/Login.jsx
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import apiService from '../services/api';
+import apiService from './services/api'; // Corrected import path
 
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
@@ -185,7 +185,7 @@ export default function Login() {
             </div>
             <div className={`relative flex items-center transition-all duration-300 ${focusedField === 'password' ? 'scale-105 shadow-lg' : ''}`}>
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-6 h-6 text-gray-500" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
-                <path d="M3.5 11.5a3.5 3.5 0 1 1 3.163-5H14L15.5 8 14 9.5l-1-1-1 1-1-1-1 1-1-1-1 1H6.663a3.5 3.5 0 0 1-3.163 2M2.5 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2"/>
+                <path d="M3.5 11.5a3.5 3.5 0 1 1 3.163-5H14L15.7 8 14 9.5l-1-1-1 1-1-1-1 1-1-1-1 1H6.663a3.5 3.5 0 0 1-3.163 2M2.5 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2"/>
               </svg>
               <input
                 type={showPassword ? 'text' : 'password'}
