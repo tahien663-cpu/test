@@ -1,3 +1,4 @@
+// src/Chat.jsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -6,7 +7,7 @@ import {
   Globe, StopCircle, RefreshCw, Image, ChevronDown
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import apiService from './services/api';  // Adjusted path assuming Chat.jsx is in src/
+import apiService from './services/api';
 
 const ImageMessage = ({ src, alt, onLoad, onError }) => {
   const [isLoading, setIsLoading] = useState(true);
@@ -60,7 +61,6 @@ export default function Chat() {
   const [showActionDropdown, setShowActionDropdown] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
-  const abortControllerRef = useRef(null);
   const dropdownRef = useRef(null);
   const messagesContainerRef = useRef(null);
 
@@ -107,66 +107,6 @@ export default function Chat() {
         container.removeEventListener('click', handleCopy);
       }
     };
-  }, []);
-
-  // Retry API call with exponential backoff
-  const retryFetch = useCallback(async (url, options, maxRetries = 3, initialDelay = 1000) => {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        abortControllerRef.current = new AbortController();
-        options.signal = abortControllerRef.current.signal;
-        const response = await fetch(url, options);
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `HTTP ${response.status}`);
-        }
-        return response;
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          console.log('Yêu cầu bị hủy');
-          return null;
-        }
-        if (attempt === maxRetries) throw err;
-        console.warn(`Retry ${attempt}/${maxRetries} for ${url}: ${err.message}`);
-        await new Promise(resolve => setTimeout(resolve, initialDelay * Math.pow(2, attempt - 1)));
-      }
-    }
-  }, []);
-
-  // Enhanced markdown parser with error handling
-  const parseMarkdown = useCallback((text) => {
-    if (!text || typeof text !== 'string') return '';
-    
-    try {
-      let html = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
-          const langClass = lang ? ` language-${lang}` : '';
-          return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
-        })
-        .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
-        .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-        .replace(/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
-        .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
-        .replace(/\n/g, '<br>')
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
-        .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
-          const tag = `h${level.length}`;
-          return `<${tag} class="font-bold mt-4 mb-2 text-${6 - level.length + 1}xl">${content}</${tag}>`;
-        })
-        .replace(/^- \s*(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
-        .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
-        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
-
-      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
-    } catch (err) {
-      console.error('Markdown parse error:', err);
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
   }, []);
 
   // Load chat history
@@ -297,20 +237,16 @@ export default function Chat() {
     }
   }, [isLoading]);
 
-  // Stop generation
-  const stopGeneration = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsLoading(false);
-      abortControllerRef.current = null;
-    }
-  }, []);
-
   // Handle send message
   const handleSendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     if (input.length > 500) {
-      setMessage({ text: 'Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.', type: 'error' });
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'ai',
+        content: 'Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.',
+        timestamp: new Date().toISOString()
+      }]);
       return;
     }
 
@@ -327,14 +263,11 @@ export default function Chat() {
     setShowActionDropdown(false);
 
     try {
-      const data = await retryFetch(() => apiService.request('/chat', {
-        method: 'POST',
-        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId })
-      }));
+      const data = await apiService.sendMessage(currentChatId, input);
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
-        content: data.message,
+        content: data.reply || data.message,
         timestamp: data.timestamp || new Date().toISOString()
       };
       setMessages(prev => [...prev, aiMessage]);
@@ -343,25 +276,23 @@ export default function Chat() {
       }
       await loadChatHistory();
     } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('Send message error:', err.message);
-        setMessages(prev => [...prev, {
-          id: Date.now().toString(),
-          role: 'ai',
-          content: '**Ôi zời, lỗi rồi!** . Thử lại sau nhé? 😅',
-          timestamp: new Date().toISOString()
-        }]);
-        if (err.message.includes('401') || err.message.includes('403')) {
-          localStorage.removeItem('token');
-          navigate('/login');
-        }
+      console.error('Send message error:', err.message);
+      setMessages(prev => [...prev, {
+        id: Date.now().toString(),
+        role: 'ai',
+        content: '**Ôi zời, lỗi rồi!** Thử lại sau nhé? 😅',
+        timestamp: new Date().toISOString()
+      }]);
+      if (err.message.includes('401') || err.message.includes('403')) {
+        localStorage.removeItem('token');
+        navigate('/login');
       }
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, currentChatId, messages, retryFetch, loadChatHistory, navigate]);
+  }, [input, isLoading, currentChatId, navigate, loadChatHistory]);
 
-  // Handle web search - prepend to prompt to trigger tool
+  // Handle web search
   const handleWebSearch = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     setShowActionDropdown(false);
@@ -387,10 +318,7 @@ export default function Chat() {
     setIsLoading(true);
 
     try {
-      const data = await retryFetch(() => apiService.request('/generate-image', {
-        method: 'POST',
-        body: JSON.stringify({ prompt: input, chatId: currentChatId })
-      }));
+      const data = await apiService.generateImage({ prompt: input, chatId: currentChatId });
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
@@ -417,18 +345,18 @@ export default function Chat() {
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, currentChatId, retryFetch, loadChatHistory, navigate]);
+  }, [input, isLoading, currentChatId, loadChatHistory, navigate]);
 
   // Delete chat
   const deleteChat = useCallback(async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
 
     try {
-      await apiService.request(`/chat/${id}`, { method: 'DELETE' });
+      await apiService.deleteChat(id);
       setChatHistory(prev => prev.filter(chat => chat.id !== id));
       if (currentChatId === id) {
         setCurrentChatId(null);
-        setMessages([messages[0]]); // Reset to welcome message
+        setMessages([messages[0]]);
       }
     } catch (err) {
       console.error('Delete chat error:', err.message);
@@ -438,9 +366,9 @@ export default function Chat() {
   // Delete message
   const deleteMessage = useCallback(async (messageId) => {
     try {
-      await apiService.request(`/message/${messageId}`, { method: 'DELETE' });
+      await apiService.deleteMessage(messageId);
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
-      await loadChatHistory(); // Refresh history
+      await loadChatHistory();
     } catch (err) {
       console.error('Delete message error:', err.message);
     }
@@ -475,15 +403,12 @@ export default function Chat() {
       {/* Sidebar */}
       <div className={`fixed inset-y-0 left-0 z-30 w-64 transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${theme === 'light' ? 'bg-white border-r border-gray-200' : 'bg-gray-800 border-r border-gray-700'}`}>
         <div className="flex h-full flex-col">
-          {/* Sidebar Header */}
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-xl font-bold">Lịch sử chat</h2>
             <button onClick={newChat} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
               <Plus className="w-5 h-5" />
             </button>
           </div>
-
-          {/* Search */}
           <div className="p-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -496,8 +421,6 @@ export default function Chat() {
               />
             </div>
           </div>
-
-          {/* Chat History */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {Object.entries(groupedHistory).map(([date, chats]) => (
               <div key={date}>
@@ -530,8 +453,6 @@ export default function Chat() {
               </div>
             ))}
           </div>
-
-          {/* Sidebar Footer */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
             <button 
               onClick={() => navigate('/home')}
@@ -558,9 +479,7 @@ export default function Chat() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Navbar */}
         <nav className="fixed top-0 left-0 right-0 z-20 bg-gradient-to-r from-sky-500/70 to-indigo-600/70 backdrop-blur-md border-b border-white/10 shadow-xl px-4 py-3 md:px-6 lg:px-8">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -587,7 +506,6 @@ export default function Chat() {
           </div>
         </nav>
 
-        {/* Messages */}
         <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 pt-20 pb-32">
           {messages.map((msg) => (
             <div 
@@ -637,7 +555,6 @@ export default function Chat() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input Area */}
         <div className={`fixed bottom-0 left-0 right-0 p-6 border-t ${theme === 'light' ? 'border-gray-200 bg-white' : 'border-gray-700 bg-gray-800'} z-10 md:static md:border-0 md:p-6`}>
           <div className="max-w-4xl mx-auto">
             <div className="relative">
@@ -647,7 +564,7 @@ export default function Chat() {
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="Nhập tin nhắn của bạn..."
-                className={`w-full p-4 pr-32 rounded-xl border-2 resize-none focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${theme === 'light' ? 'bg-gray-50 border-gray-300 text-gray-900 placeholder-gray-500' : 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'} shadow-sm focus:ring-blue-500 min-h-[3rem] max-h-48`}
+                className={`w-full p-4 pr-32 rounded-xl border-2 resize-none focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500' : 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'} shadow-sm focus:ring-blue-500 min-h-[3rem] max-h-48`}
                 disabled={isLoading}
                 rows={1}
                 style={{ 
@@ -659,8 +576,6 @@ export default function Chat() {
                   e.target.style.height = Math.min(e.target.scrollHeight, 192) + 'px';
                 }}
               />
-              
-              {/* Formatting Buttons */}
               {!isLoading && input.trim() && (
                 <div className="absolute right-24 top-3 flex gap-1">
                   <button
@@ -686,10 +601,7 @@ export default function Chat() {
                   </button>
                 </div>
               )}
-
-              {/* Action Buttons */}
               <div className="absolute right-3 top-3 flex gap-2" ref={dropdownRef}>
-                {/* Action Dropdown */}
                 {!isLoading && input.trim() && (
                   <div className="relative">
                     <button
@@ -721,8 +633,6 @@ export default function Chat() {
                     )}
                   </div>
                 )}
-
-                {/* Send Button */}
                 <button
                   onClick={handleSendMessage}
                   disabled={isLoading || !input.trim()}
@@ -733,8 +643,6 @@ export default function Chat() {
                 </button>
               </div>
             </div>
-
-            {/* Shortcuts hint */}
             <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
               <span>Enter để gửi, Shift+Enter để xuống dòng</span>
               <span>Ctrl+B/I/` để định dạng</span>
