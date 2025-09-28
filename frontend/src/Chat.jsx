@@ -2,9 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Send, Bot, User, Loader2, Menu, Plus, MessageSquare, 
-  Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, 
-  Globe, StopCircle, RefreshCw, Image, ChevronDown
+  Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, Globe, Image, ChevronDown
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
@@ -64,19 +62,16 @@ export default function Chat() {
   const dropdownRef = useRef(null);
   const messagesContainerRef = useRef(null);
 
-  // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
         setShowActionDropdown(false);
       }
     };
-
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Handle copy code button clicks
   useEffect(() => {
     const handleCopy = (e) => {
       if (e.target.classList.contains('copy-code-btn')) {
@@ -96,12 +91,10 @@ export default function Chat() {
         }
       }
     };
-
     const container = messagesContainerRef.current;
     if (container) {
       container.addEventListener('click', handleCopy);
     }
-
     return () => {
       if (container) {
         container.removeEventListener('click', handleCopy);
@@ -109,7 +102,6 @@ export default function Chat() {
     };
   }, []);
 
-  // Load chat history
   const loadChatHistory = useCallback(async () => {
     try {
       const data = await apiService.getChatHistory();
@@ -130,7 +122,6 @@ export default function Chat() {
     loadChatHistory();
   }, [loadChatHistory]);
 
-  // Load specific chat from history
   const loadChat = useCallback((id) => {
     const selectedChat = chatHistory.find(chat => chat.id === id);
     if (selectedChat) {
@@ -145,13 +136,11 @@ export default function Chat() {
     }
   }, [currentChatId, loadChat, chatHistory]);
 
-  // Format timestamp
   const formatTimestamp = useMemo(() => (timestamp) => {
     const date = new Date(timestamp);
     const today = new Date();
     const yesterday = new Date(today);
     yesterday.setDate(today.getDate() - 1);
-
     if (date.toDateString() === today.toDateString()) {
       return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     } else if (date.toDateString() === yesterday.toDateString()) {
@@ -161,7 +150,6 @@ export default function Chat() {
     }
   }, []);
 
-  // Group chat history by date
   const groupedHistory = useMemo(() => {
     const groups = {};
     chatHistory.forEach(chat => {
@@ -172,17 +160,14 @@ export default function Chat() {
     return groups;
   }, [chatHistory]);
 
-  // Insert formatting
   const insertFormatting = useCallback((formatType) => {
     const textarea = inputRef.current;
     if (!textarea) return;
-
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const selectedText = input.substring(start, end);
     let newText;
     let newCursorPos;
-
     switch (formatType) {
       case 'bold':
         newText = `**${selectedText || 'text'}**`;
@@ -199,7 +184,6 @@ export default function Chat() {
       default:
         return;
     }
-
     setInput(input.substring(0, start) + newText + input.substring(end));
     setTimeout(() => {
       textarea.focus();
@@ -211,7 +195,6 @@ export default function Chat() {
   const insertItalic = () => insertFormatting('italic');
   const insertCode = () => insertFormatting('code');
 
-  // Handle keydown for formatting shortcuts
   const handleKeyDown = useCallback((e) => {
     if (e.ctrlKey || e.metaKey) {
       switch (e.key.toLowerCase()) {
@@ -237,7 +220,6 @@ export default function Chat() {
     }
   }, [isLoading]);
 
-  // Handle send message
   const handleSendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     if (input.length > 500) {
@@ -263,11 +245,18 @@ export default function Chat() {
     setShowActionDropdown(false);
 
     try {
-      const data = await apiService.sendMessage(currentChatId, input);
+      // Send the full message history with the new user message
+      const data = await apiService.request('/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          messages: [...messages.filter(m => m.id !== 'welcome'), userMessage],
+          chatId: currentChatId
+        })
+      });
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
-        content: data.reply || data.message,
+        content: data.message,
         timestamp: data.timestamp || new Date().toISOString()
       };
       setMessages(prev => [...prev, aiMessage]);
@@ -290,9 +279,8 @@ export default function Chat() {
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, currentChatId, navigate, loadChatHistory]);
+  }, [input, isLoading, currentChatId, messages, navigate, loadChatHistory]);
 
-  // Handle web search
   const handleWebSearch = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     setShowActionDropdown(false);
@@ -301,7 +289,6 @@ export default function Chat() {
     await handleSendMessage();
   }, [input, isLoading, handleSendMessage]);
 
-  // Handle generate image
   const handleGenerateImage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     setShowActionDropdown(false);
@@ -347,10 +334,8 @@ export default function Chat() {
     }
   }, [input, isLoading, currentChatId, loadChatHistory, navigate]);
 
-  // Delete chat
   const deleteChat = useCallback(async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
-
     try {
       await apiService.deleteChat(id);
       setChatHistory(prev => prev.filter(chat => chat.id !== id));
@@ -363,7 +348,6 @@ export default function Chat() {
     }
   }, [currentChatId, messages]);
 
-  // Delete message
   const deleteMessage = useCallback(async (messageId) => {
     try {
       await apiService.deleteMessage(messageId);
@@ -374,13 +358,11 @@ export default function Chat() {
     }
   }, [loadChatHistory]);
 
-  // New chat
   const newChat = useCallback(() => {
     setCurrentChatId(null);
     setMessages([messages[0]]);
   }, [messages]);
 
-  // Toggle theme
   const toggleTheme = useCallback(() => {
     const newTheme = theme === 'light' ? 'dark' : 'light';
     setTheme(newTheme);
@@ -388,19 +370,16 @@ export default function Chat() {
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   }, [theme]);
 
-  // Scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Theme effect
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
   return (
     <div className={`min-h-screen flex ${theme === 'light' ? 'bg-gray-50' : 'bg-gray-900'} text-gray-900 dark:text-white transition-colors duration-300`}>
-      {/* Sidebar */}
       <div className={`fixed inset-y-0 left-0 z-30 w-64 transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${theme === 'light' ? 'bg-white border-r border-gray-200' : 'bg-gray-800 border-r border-gray-700'}`}>
         <div className="flex h-full flex-col">
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
@@ -652,4 +631,37 @@ export default function Chat() {
       </div>
     </div>
   );
+
+  function parseMarkdown(text) {
+    if (!text || typeof text !== 'string') return '';
+    try {
+      let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
+          const langClass = lang ? ` language-${lang}` : '';
+          return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
+        })
+        .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
+        .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
+        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
+        .replace(/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
+        .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
+        .replace(/\n/g, '<br>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
+        .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
+          const tag = `h${level.length}`;
+          return `<${tag} class="font-bold mt-4 mb-2 text-${6 - level.length + 1}xl">${content}</${tag}>`;
+        })
+        .replace(/^- \s*(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
+        .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
+        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
+      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
+    } catch (err) {
+      console.error('Markdown parse error:', err);
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+  }
 }
