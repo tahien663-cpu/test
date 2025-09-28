@@ -1,6 +1,7 @@
+// src/App.jsx
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import Login from './Login';
-import Chat from './Chat'; // Replace with your actual Chat component
+import Chat from './Chat';
 
 function App() {
   return (
@@ -9,6 +10,8 @@ function App() {
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Login />} />
         <Route path="/chat" element={<Chat />} />
+        <Route path="/home" element={<Login />} /> {/* Add if /home is needed */}
+        <Route path="/settings" element={<Login />} /> {/* Add if /settings is needed */}
       </Routes>
     </BrowserRouter>
   );
