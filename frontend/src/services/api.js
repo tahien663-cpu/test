@@ -2,7 +2,7 @@
 const API_BASE_URL = 'https://test-d9o3.onrender.com/api';
 const DEFAULT_TIMEOUT_MS = 12000;
 
-console.log('API_BASE_URL:', API_BASE_URL); // Debug log to confirm URL
+console.log('API_BASE_URL:', API_BASE_URL);
 
 class ApiService {
   static instance = null;
@@ -36,7 +36,7 @@ class ApiService {
     };
 
     for (let attempt = 1; attempt <= retries; attempt++) {
-      let controller = new AbortController(); // Always create a new controller
+      let controller = new AbortController();
       let timeout;
 
       try {
@@ -76,7 +76,7 @@ class ApiService {
         }
       } catch (error) {
         console.error(`API Error [${endpoint}] (Attempt ${attempt}/${retries}):`, error.message);
-        clearTimeout(timeout); // Ensure timeout is cleared
+        clearTimeout(timeout);
 
         if (error.name === 'AbortError') {
           error = new Error('Yêu cầu quá thời gian, vui lòng thử lại');
@@ -84,10 +84,10 @@ class ApiService {
 
         if (attempt < retries) {
           console.log(`Retrying ${attempt + 1}/${retries} for ${endpoint}`);
-          continue; // Retry the request
+          continue;
         }
 
-        throw error; // Throw the error if all retries fail
+        throw error;
       }
     }
   }
