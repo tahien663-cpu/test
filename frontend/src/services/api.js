@@ -1,5 +1,5 @@
 // src/services/api.js
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://test-d9o3.onrender.com/api';
 const DEFAULT_TIMEOUT_MS = 12000;
 
 class ApiService {
