@@ -143,7 +143,7 @@ export default function Chat() {
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
         .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
+        .replace/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>'
         .replace/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>'
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
@@ -321,12 +321,10 @@ export default function Chat() {
     setShowActionDropdown(false);
 
     try {
-      const formattedMessages = messages.map(m => ({
-        role: m.role === 'ai' ? 'assistant' : m.role,
-        content: m.content
-      })).concat({ role: 'user', content: input });
-
-      const data = await retryFetch(() => apiService.sendMessage(currentChatId, formattedMessages));
+      const data = await retryFetch(() => apiService.request('/chat', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId })
+      }));
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
