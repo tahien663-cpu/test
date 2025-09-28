@@ -1,7 +1,7 @@
 // src/Login.jsx
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import apiService from './services/api'; // Corrected import path
+import apiService from './services/api';
 
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
