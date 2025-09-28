@@ -1,10 +1,16 @@
-// src/services/api.js - Singleton API Service (Enhanced)
-const API_BASE_URL = 'http://localhost:3001/api';  // TODO: move to env for prod
+// src/services/api.js
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:3001/api';
 const DEFAULT_TIMEOUT_MS = 12000;
 
 class ApiService {
+  static instance = null;
+
   constructor() {
-    this.baseURL = API_BASE_URL;
+    if (!ApiService.instance) {
+      this.baseURL = API_BASE_URL;
+      ApiService.instance = this;
+    }
+    return ApiService.instance;
   }
 
   getToken() {
@@ -32,15 +38,34 @@ class ApiService {
       const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
       const response = await fetch(url, { ...config, signal: controller.signal });
       clearTimeout(timeout);
+
+      const text = await response.text(); // Get raw text first
+
       if (!response.ok) {
-        const data = await response.json().catch(() => ({}));
-        // auto sign-out on 401/403
+        let data;
+        try {
+          data = JSON.parse(text); // Try to parse as JSON
+        } catch {
+          throw new Error(`Server returned non-JSON: ${text || 'Empty response'} (Status: ${response.status})`);
+        }
+
         if (response.status === 401 || response.status === 403) {
           localStorage.removeItem('token');
+          localStorage.removeItem('userName');
+          localStorage.removeItem('userEmail');
         }
         throw new Error(data.error || `HTTP ${response.status}`);
       }
-      return response.json();
+
+      if (!text) {
+        throw new Error('Empty response from server');
+      }
+
+      try {
+        return JSON.parse(text); // Parse valid JSON
+      } catch {
+        throw new Error('Invalid JSON response from server');
+      }
     } catch (error) {
       console.error(`API Error [${endpoint}]:`, error.message);
       if (error.name === 'AbortError') {
@@ -51,42 +76,76 @@ class ApiService {
   }
 
   // Auth
-  async register(userData) {
-    return this.request('/register', { method: 'POST', body: JSON.stringify(userData), includeAuth: false });
+  async login({ email, password }) {
+    const data = await this.request('/login', {
+      method: 'POST',
+      body: JSON.stringify({ email, password }),
+      includeAuth: false,
+    });
+    localStorage.setItem('token', data.token);
+    localStorage.setItem('userName', data.user.name);
+    localStorage.setItem('userEmail', data.user.email);
+    return data;
   }
 
-  async login(credentials) {
-    return this.request('/login', { method: 'POST', body: JSON.stringify(credentials), includeAuth: false });
-  }
-
-  async verifyToken() {
-    return this.request('/verify', { method: 'GET', includeAuth: true });
+  async register({ email, password, name }) {
+    const data = await this.request('/register', {
+      method: 'POST',
+      body: JSON.stringify({ email, password, name }),
+      includeAuth: false,
+    });
+    return data;
   }
 
   // User
-  async getUserProfile() {
-    return this.request('/user/profile', { method: 'GET' });
+  async updateProfile({ name, email }) {
+    const data = await this.request('/profile', {
+      method: 'PUT',
+      body: JSON.stringify({ name, email }),
+    });
+    localStorage.setItem('userName', data.user.name);
+    localStorage.setItem('userEmail', data.user.email);
+    return data;
   }
 
-  async updateProfile(profileData) {
-    return this.request('/update-profile', { method: 'PUT', body: JSON.stringify(profileData) });
-  }
-
-  async changePassword(passwordData) {
-    return this.request('/user/change-password', { method: 'PUT', body: JSON.stringify(passwordData) });
+  async changePassword({ currentPassword, newPassword }) {
+    return this.request('/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    });
   }
 
   async deleteAccount() {
-    return this.request('/user/account', { method: 'DELETE' });
+    const data = await this.request('/account', { method: 'DELETE' });
+    localStorage.clear();
+    return data;
   }
 
   // Chat
-  async sendMessage(message) {
-    return this.request('/chat', { method: 'POST', body: JSON.stringify({ message }) });
+  async sendMessage(chatId, message) {
+    return this.request(chatId ? `/chat/${chatId}` : '/chat', {
+      method: 'POST',
+      body: JSON.stringify({ message }),
+    });
   }
 
   async getChatHistory() {
     return this.request('/chat/history', { method: 'GET' });
+  }
+
+  async deleteChat(chatId) {
+    return this.request(`/chat/${chatId}`, { method: 'DELETE' });
+  }
+
+  async deleteMessage(messageId) {
+    return this.request(`/message/${messageId}`, { method: 'DELETE' });
+  }
+
+  async generateImage(options) {
+    return this.request('/generate-image', {
+      method: 'POST',
+      body: JSON.stringify(options),
+    });
   }
 }
 
