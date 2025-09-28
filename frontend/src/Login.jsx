@@ -1,7 +1,6 @@
-// src/components/Login.jsx
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
-import apiService from '../services/api';
+import apiService from './services/api';  // Adjusted path assuming Login.jsx is in src/
 
 export default function Login() {
   const [isRegister, setIsRegister] = useState(false);
