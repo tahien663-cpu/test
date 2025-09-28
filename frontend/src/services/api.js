@@ -1,6 +1,8 @@
 // src/services/api.js
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://test-d9o3.onrender.com/api';
+const API_BASE_URL = 'https://test-d9o3.onrender.com/api';
 const DEFAULT_TIMEOUT_MS = 12000;
+
+console.log('API_BASE_URL:', API_BASE_URL); // Debug log to confirm URL
 
 class ApiService {
   static instance = null;
@@ -26,52 +28,67 @@ class ApiService {
     return headers;
   }
 
-  async request(endpoint, options = {}) {
+  async request(endpoint, options = {}, retries = 3) {
     const url = `${this.baseURL}${endpoint}`;
     const config = {
       headers: this.getHeaders(options.includeAuth !== false),
       ...options,
     };
 
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), options.timeoutMs || DEFAULT_TIMEOUT_MS);
-      const response = await fetch(url, { ...config, signal: controller.signal });
-      clearTimeout(timeout);
-
-      const text = await response.text();
-
-      if (!response.ok) {
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch {
-          throw new Error(`Server returned non-JSON: ${text || 'Empty response'} (Status: ${response.status})`);
-        }
-
-        if (response.status === 401 || response.status === 403) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('userName');
-          localStorage.removeItem('userEmail');
-        }
-        throw new Error(data.error || `HTTP ${response.status}`);
-      }
-
-      if (!text) {
-        throw new Error('Empty response from server');
-      }
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      let controller = new AbortController(); // Always create a new controller
+      let timeout;
 
       try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error('Invalid JSON response from server');
+        timeout = setTimeout(() => {
+          controller.abort();
+        }, options.timeoutMs || DEFAULT_TIMEOUT_MS);
+
+        const response = await fetch(url, { ...config, signal: controller.signal });
+        clearTimeout(timeout);
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            throw new Error(`Server returned non-JSON: ${text || 'Empty response'} (Status: ${response.status})`);
+          }
+
+          if (response.status === 401 || response.status === 403) {
+            localStorage.removeItem('token');
+            localStorage.removeItem('userName');
+            localStorage.removeItem('userEmail');
+          }
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+
+        if (!text) {
+          throw new Error('Empty response from server');
+        }
+
+        try {
+          return JSON.parse(text);
+        } catch {
+          throw new Error('Invalid JSON response from server');
+        }
+      } catch (error) {
+        console.error(`API Error [${endpoint}] (Attempt ${attempt}/${retries}):`, error.message);
+        clearTimeout(timeout); // Ensure timeout is cleared
+
+        if (error.name === 'AbortError') {
+          error = new Error('Yêu cầu quá thời gian, vui lòng thử lại');
+        }
+
+        if (attempt < retries) {
+          console.log(`Retrying ${attempt + 1}/${retries} for ${endpoint}`);
+          continue; // Retry the request
+        }
+
+        throw error; // Throw the error if all retries fail
       }
-    } catch (error) {
-      console.error(`API Error [${endpoint}]:`, error.message);
-      if (error.name === 'AbortError') {
-        throw new Error('Yêu cầu quá thời gian, vui lòng thử lại');
-      }
-      throw error;
     }
   }
 
