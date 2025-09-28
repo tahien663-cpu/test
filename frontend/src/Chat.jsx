@@ -1,4 +1,3 @@
-// src/components/Chat.jsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -7,7 +6,6 @@ import {
   Globe, StopCircle, RefreshCw, Image, ChevronDown
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
-import apiService from '../services/api';
 
 const ImageMessage = ({ src, alt, onLoad, onError }) => {
   const [isLoading, setIsLoading] = useState(true);
@@ -46,7 +44,7 @@ export default function Chat() {
     {
       id: 'welcome',
       role: 'ai',
-      content: 'Xin chào! Tôi là **Hein**! ! 😄',
+      content: 'Xin chào! Tôi là **Hein**! 😄',
       timestamp: new Date().toISOString()
     }
   ]);
@@ -111,17 +109,24 @@ export default function Chat() {
   }, []);
 
   // Retry API call with exponential backoff
-  const retryFetch = useCallback(async (fn, maxRetries = 3, initialDelay = 1000) => {
+  const retryFetch = useCallback(async (url, options, maxRetries = 3, initialDelay = 1000) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        return await fn();
+        abortControllerRef.current = new AbortController();
+        options.signal = abortControllerRef.current.signal;
+        const response = await fetch(url, options);
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        return response;
       } catch (err) {
         if (err.name === 'AbortError') {
           console.log('Yêu cầu bị hủy');
           return null;
         }
         if (attempt === maxRetries) throw err;
-        console.warn(`Retry ${attempt}/${maxRetries}: ${err.message}`);
+        console.warn(`Retry ${attempt}/${maxRetries} for ${url}: ${err.message}`);
         await new Promise(resolve => setTimeout(resolve, initialDelay * Math.pow(2, attempt - 1)));
       }
     }
@@ -143,8 +148,8 @@ export default function Chat() {
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
         .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>'
-        .replace/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>'
+        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
+        .replace(/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
@@ -301,7 +306,7 @@ export default function Chat() {
   }, []);
 
   // Handle send message
-  const handleSendMessage = useCallback(async (options = {}) => {
+  const handleSendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     if (input.length > 500) {
       setMessage({ text: 'Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.', type: 'error' });
@@ -381,7 +386,10 @@ export default function Chat() {
     setIsLoading(true);
 
     try {
-      const data = await retryFetch(() => apiService.generateImage({ prompt: input, chatId: currentChatId }));
+      const data = await retryFetch(() => apiService.request('/generate-image', {
+        method: 'POST',
+        body: JSON.stringify({ prompt: input, chatId: currentChatId })
+      }));
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
@@ -415,7 +423,7 @@ export default function Chat() {
     if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
 
     try {
-      await apiService.deleteChat(id);
+      await apiService.request(`/chat/${id}`, { method: 'DELETE' });
       setChatHistory(prev => prev.filter(chat => chat.id !== id));
       if (currentChatId === id) {
         setCurrentChatId(null);
@@ -429,7 +437,7 @@ export default function Chat() {
   // Delete message
   const deleteMessage = useCallback(async (messageId) => {
     try {
-      await apiService.deleteMessage(messageId);
+      await apiService.request(`/message/${messageId}`, { method: 'DELETE' });
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
       await loadChatHistory(); // Refresh history
     } catch (err) {
