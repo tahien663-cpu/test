@@ -1,0 +1,9 @@
+/node_modules
+
+# Các file cấu hình môi trường
+.env
+.env.local
+
+# Các file hệ điều hành
+.DS_Store # Dành cho macOS
+Thumbs.db # Dành cho Windows

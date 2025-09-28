@@ -1,0 +1,96 @@
+
+/* Chat.css */
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 16px;
+  background-color: #f3f4f6;
+}
+
+.messages-container {
+  flex: 1;
+  overflow-y: auto;
+  margin-bottom: 16px;
+  padding: 16px;
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.message {
+  margin-bottom: 16px;
+  padding: 12px;
+  border-radius: 8px;
+}
+
+.message.user {
+  background-color: #dbeafe;
+  margin-left: 32px;
+}
+
+.message.ai {
+  background-color: #e5e7eb;
+  margin-right: 32px;
+}
+
+.input-container {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+textarea {
+  flex: 1;
+  padding: 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  resize: none;
+  outline: none;
+}
+
+textarea:focus {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+}
+
+button {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+button:disabled {
+  background-color: #9ca3af;
+  cursor: not-allowed;
+}
+
+button.send {
+  background-color: #3b82f6;
+  color: white;
+}
+
+button.send:hover:not(:disabled) {
+  background-color: #2563eb;
+}
+
+button.stop {
+  background-color: #ef4444;
+  color: white;
+}
+
+button.stop:hover {
+  background-color: #dc2626;
+}
+
+button.regenerate {
+  background-color: #10b981;
+  color: white;
+}
+
+button.regenerate:hover {
+  background-color: #059669;
+}

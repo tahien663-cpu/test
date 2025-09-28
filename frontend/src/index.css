@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root.light {
+  --background: #f3f4f6;
+  --card-bg: rgba(255, 255, 255, 0.9);
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+}
+
+:root.dark {
+  --background: #111827;
+  --card-bg: rgba(255, 255, 255, 0.05);
+  --text-primary: #f9fafb;
+  --text-secondary: #d1d5db;
+}
+
+body {
+  background: var(--background);
+  color: var(--text-primary);
+}
+
+.backdrop-blur-2xl {
+  background: var(--card-bg);
+  color: var(--text-primary);
+}
+
+@keyframes modalIn {
+  from { transform: scale(0.95); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
