@@ -396,6 +396,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 app.post('/api/generate-image', authenticateToken, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
+    console.info(`Generate image request: userId=${req.user.id}, chatId=${chatId}, prompt=${prompt}`);
     if (!prompt) {
       return res.status(400).json({ error: 'Missing prompt', code: 'INVALID_INPUT' });
     }
@@ -405,10 +406,12 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
     let newChatId = chatId;
 
     if (chatId && !validateId(chatId)) {
+      console.warn(`Invalid chat ID format: ${chatId}`);
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
     if (!chatId) {
+      console.log(`Creating new chat for userId=${userId}, title=${sanitizedPrompt.substring(0, 50)}`);
       const { data: chat, error: chatError } = await supabase
         .from('chats')
         .insert([{ user_id: userId, title: sanitizedPrompt.substring(0, 50) }])
@@ -416,11 +419,13 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
         .single();
 
       if (chatError) {
-        console.error(`Create chat error: ${chatError.message}`);
+        console.error(`Create chat error: ${chatError.message}, code: ${chatError.code}, details: ${JSON.stringify(chatError.details)}`);
         return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? chatError.message : undefined });
       }
       newChatId = chat.id;
+      console.info(`New chat created: chatId=${newChatId}`);
     } else {
+      console.log(`Verifying chat: chatId=${chatId}, userId=${userId}`);
       const { data: chat, error: chatError } = await supabase
         .from('chats')
         .select('id')
@@ -429,23 +434,27 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
         .single();
 
       if (chatError || !chat) {
+        console.error(`Chat not found: chatId=${chatId}, error=${chatError?.message}`);
         return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
       }
       newChatId = chat.id;
     }
 
+    console.log(`Fetching image from pollinations.ai with prompt: ${sanitizedPrompt}`);
     const response = await fetch(`https://image.pollinations.ai/prompt/${encodeURIComponent(sanitizedPrompt)}`, {
       headers: { 'Content-Type': 'application/json' }
     });
 
     if (!response.ok) {
-      console.error(`Image generation error: ${response.statusText}`);
+      console.error(`Image generation error: status=${response.status}, statusText=${response.statusText}`);
       return res.status(500).json({ error: 'Failed to generate image', code: 'IMAGE_GENERATION_ERROR', details: process.env.NODE_ENV === 'development' ? response.statusText : undefined });
     }
 
     const imageUrl = await response.text();
+    console.info(`Image URL received: ${imageUrl}`);
     const messageContent = `![Generated Image](${imageUrl})`;
 
+    console.log(`Saving message to Supabase: chatId=${newChatId}, content=${messageContent}`);
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
       .insert([{
@@ -458,10 +467,11 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       .single();
 
     if (messageError) {
-      console.error(`Save image message error: ${messageError.message}`);
+      console.error(`Save image message error: ${messageError.message}, code: ${messageError.code}, details: ${JSON.stringify(messageError.details)}`);
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
     }
 
+    console.log(`Updating chat: chatId=${newChatId}`);
     const { error: updateError } = await supabase
       .from('chats')
       .update({
@@ -471,10 +481,10 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       .eq('id', newChatId);
 
     if (updateError) {
-      console.warn(`Update chat error: ${updateError.message}`);
+      console.warn(`Update chat error: ${updateError.message}, code: ${updateError.code}, details: ${JSON.stringify(updateError.details)}`);
     }
 
-    console.info(`Image generated: chatId=${newChatId}, userId=${userId}`);
+    console.info(`Image generated: chatId=${newChatId}, userId=${userId}, messageId=${savedMessage.id}`);
     res.json({
       message: messageContent,
       messageId: savedMessage.id,
@@ -482,7 +492,7 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       timestamp: savedMessage.timestamp
     });
   } catch (err) {
-    console.error(`Image generation error: ${err.message}`);
+    console.error(`Image generation error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -546,17 +556,34 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
     const { chatId } = req.params;
     const userId = req.user.id;
 
+    console.info(`Delete chat request: chatId=${chatId}, userId=${userId}`);
+
     if (!validateId(chatId)) {
+      console.warn(`Invalid chat ID format: ${chatId}`);
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
+    console.log(`Verifying chat exists: chatId=${chatId}, userId=${userId}`);
+    const { data: chat, error: chatError } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('id', chatId)
+      .eq('user_id', userId)
+      .single();
+
+    if (chatError || !chat) {
+      console.error(`Chat not found: chatId=${chatId}, error=${chatError?.message}`);
+      return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
+    }
+
+    console.log(`Executing delete_chat_with_messages: chatId=${chatId}, userId=${userId}`);
     const { error: transactionError } = await supabase.rpc('delete_chat_with_messages', {
       p_chat_id: chatId,
       p_user_id: userId
     });
 
     if (transactionError) {
-      console.error(`Delete chat error: ${transactionError.message}`);
+      console.error(`Delete chat error: ${transactionError.message}, code: ${transactionError.code}, details: ${JSON.stringify(transactionError.details)}`);
       return res.status(500).json({
         error: 'Failed to delete chat',
         code: 'DATABASE_ERROR',
@@ -583,6 +610,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
     const userId = req.user.id;
 
     if (!validateId(messageId)) {
+      console.warn(`Invalid message ID format: ${messageId}`);
       return res.status(400).json({ error: 'Invalid message ID format', code: 'INVALID_MESSAGE_ID' });
     }
 
