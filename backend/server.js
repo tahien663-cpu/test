@@ -279,6 +279,8 @@ app.post('/api/login', authLimiter, async (req, res) => {
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { messages, chatId } = req.body;
+    console.info(`Processing chat request: userId=${req.user.id}, chatId=${chatId}, messages=${JSON.stringify(messages)}`);
+    
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Invalid messages format', code: 'INVALID_INPUT' });
     }
@@ -334,7 +336,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error(`OpenRouter error: ${errorData.error || response.statusText}`);
+      console.error(`OpenRouter error: status=${response.status}, error=${JSON.stringify(errorData)}`);
       return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR', details: process.env.NODE_ENV === 'development' ? errorData.error : undefined });
     }
 
@@ -378,7 +380,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       timestamp: savedMessage.timestamp
     });
   } catch (err) {
-    console.error(`Chat error: ${err.message}`);
+    console.error(`Chat endpoint error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -526,7 +528,7 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
     console.info(`Chat history retrieved: userId=${userId}, page=${page}, limit=${limit}, chats=${chats.length}`);
     res.json({ history });
   } catch (err) {
-    console.error(`Chat history error: ${err.message}`);
+    console.error(`Chat history error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -562,7 +564,7 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
     console.info(`Chat deleted: chatId=${chatId}, userId=${userId}`);
     res.json({ message: 'Chat deleted successfully' });
   } catch (err) {
-    console.error(`Delete chat error: ${err.message}`);
+    console.error(`Delete chat error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -635,7 +637,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
     console.info(`Message deleted: messageId=${messageId}, userId=${userId}`);
     res.json({ message: 'Message deleted successfully', messageId });
   } catch (err) {
-    console.error(`Delete message error: ${err.message}`);
+    console.error(`Delete message error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -656,7 +658,7 @@ app.use('*', (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error(`Unhandled error: ${err.message}`, { stack: err.stack });
+  console.error(`Unhandled error: ${err.message}, stack: ${err.stack}`);
   res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_SERVER_ERROR',
