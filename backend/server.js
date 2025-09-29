@@ -39,7 +39,7 @@ app.use(helmet({
       defaultSrc: ["'self'"],
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
+      imgSrc: ["'self'", "data:", "https:", "http:"],
       connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
@@ -63,6 +63,14 @@ const authLimiter = rateLimit({
   max: 5,
   message: { error: 'Too many login/register attempts, please try again after 15 minutes' },
   skipSuccessfulRequests: true
+});
+
+const imageLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  message: { error: 'Too many image generation requests, please try again after 1 minute' },
+  standardHeaders: true,
+  legacyHeaders: false
 });
 
 // CORS configuration
@@ -93,6 +101,9 @@ app.use(cors({
   credentials: true
 }));
 
+// Handle preflight requests
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(generalLimiter);
@@ -102,7 +113,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.1',
+    version: '1.0.2',
     endpoints: [
       '/health',
       '/api/register',
@@ -163,7 +174,8 @@ app.get('/health', async (req, res) => {
     if (supabaseError) throw new Error(`Supabase connection failed: ${supabaseError.message}`);
 
     const openRouterResponse = await fetch('https://openrouter.ai/api/v1/models', {
-      headers: { Authorization: `Bearer ${openRouterKey}` }
+      headers: { Authorization: `Bearer ${openRouterKey}` },
+      timeout: 5000
     });
     if (!openRouterResponse.ok) throw new Error('OpenRouter connection failed');
 
@@ -171,7 +183,7 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.1',
+      version: '1.0.2',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       dependencies: { supabase: 'connected', openRouter: 'connected' }
@@ -194,14 +206,18 @@ app.post('/api/register', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields', code: 'INVALID_INPUT' });
     }
 
-    const sanitizedEmail = sanitizeInput(email);
+    const sanitizedEmail = sanitizeInput(email).toLowerCase();
     const sanitizedName = sanitizeInput(name);
+
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters', code: 'INVALID_PASSWORD' });
+    }
 
     const { data: existingUser, error: userError } = await supabase
       .from('users')
       .select('id')
       .eq('email', sanitizedEmail)
-      .single();
+      .maybeSingle();
 
     if (existingUser) {
       return res.status(400).json({ error: 'Email already exists', code: 'EMAIL_EXISTS' });
@@ -243,12 +259,12 @@ app.post('/api/login', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Missing email or password', code: 'INVALID_INPUT' });
     }
 
-    const sanitizedEmail = sanitizeInput(email);
+    const sanitizedEmail = sanitizeInput(email).toLowerCase();
     const { data: user, error } = await supabase
       .from('users')
       .select('*')
       .eq('email', sanitizedEmail)
-      .single();
+      .maybeSingle();
 
     if (error || !user) {
       return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
@@ -279,9 +295,9 @@ app.post('/api/login', authLimiter, async (req, res) => {
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { messages, chatId } = req.body;
-    console.info(`Processing chat request: userId=${req.user.id}, chatId=${chatId}, messages=${JSON.stringify(messages)}`);
+    console.info(`Processing chat request: userId=${req.user.id}, chatId=${chatId}`);
     
-    if (!messages || !Array.isArray(messages)) {
+    if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Invalid messages format', code: 'INVALID_INPUT' });
     }
 
@@ -292,6 +308,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
+    // Create or verify chat
     if (!chatId) {
       const firstMessage = sanitizeInput(messages[0]?.content || 'New chat');
       const { data: chat, error: chatError } = await supabase
@@ -311,12 +328,29 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         .select('id')
         .eq('id', chatId)
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (chatError || !chat) {
         return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
       }
       newChatId = chat.id;
+    }
+
+    // Save user message first
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+    if (lastUserMessage) {
+      const { error: userMsgError } = await supabase
+        .from('messages')
+        .insert([{
+          chat_id: newChatId,
+          role: 'user',
+          content: sanitizeInput(lastUserMessage.content),
+          timestamp: new Date().toISOString()
+        }]);
+
+      if (userMsgError) {
+        console.warn(`Save user message error: ${userMsgError.message}`);
+      }
     }
 
     // Map 'ai' role to 'assistant' for OpenRouter
@@ -329,7 +363,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${openRouterKey}`,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
       },
       body: JSON.stringify({
         model: 'x-ai/grok-4-fast:free',
@@ -338,13 +374,13 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json().catch(() => ({}));
       console.error(`OpenRouter error: status=${response.status}, error=${JSON.stringify(errorData)}`);
       return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR', details: process.env.NODE_ENV === 'development' ? errorData.error : undefined });
     }
 
-    const { choices } = await response.json();
-    const aiMessage = choices[0]?.message?.content || 'No response from AI';
+    const data = await response.json();
+    const aiMessage = data.choices?.[0]?.message?.content || 'No response from AI';
 
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
@@ -362,11 +398,11 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
     }
 
-    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
+    // Update chat with last message
     const { error: updateError } = await supabase
       .from('chats')
       .update({
-        last_message: sanitizeInput(lastUserMessage.content).substring(0, 100),
+        last_message: sanitizeInput(lastUserMessage?.content || 'Chat').substring(0, 100),
         updated_at: new Date().toISOString()
       })
       .eq('id', newChatId);
@@ -392,13 +428,18 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
-// Thay thế endpoint /api/generate-image trong server.js
-app.post('/api/generate-image', authenticateToken, async (req, res) => {
+// Generate image endpoint - FIXED
+app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
     console.info(`Generate image request: userId=${req.user.id}, chatId=${chatId}, prompt=${prompt}`);
+    
     if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
       return res.status(400).json({ error: 'Invalid or missing prompt', code: 'INVALID_INPUT' });
+    }
+
+    if (prompt.length > 500) {
+      return res.status(400).json({ error: 'Prompt too long (max 500 characters)', code: 'PROMPT_TOO_LONG' });
     }
 
     const sanitizedPrompt = sanitizeInput(prompt);
@@ -410,16 +451,17 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
+    // Create or verify chat
     if (!chatId) {
-      console.log(`Creating new chat for userId=${userId}, title=${sanitizedPrompt.substring(0, 50)}`);
+      console.log(`Creating new chat for userId=${userId}`);
       const { data: chat, error: chatError } = await supabase
         .from('chats')
-        .insert([{ user_id: userId, title: sanitizedPrompt.substring(0, 50) }])
+        .insert([{ user_id: userId, title: `Image: ${sanitizedPrompt.substring(0, 40)}` }])
         .select()
         .single();
 
       if (chatError) {
-        console.error(`Create chat error: ${chatError.message}, code: ${chatError.code}, details: ${JSON.stringify(chatError.details)}`);
+        console.error(`Create chat error: ${chatError.message}`);
         return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? chatError.message : undefined });
       }
       newChatId = chat.id;
@@ -431,49 +473,67 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
         .select('id')
         .eq('id', chatId)
         .eq('user_id', userId)
-        .single();
+        .maybeSingle();
 
       if (chatError || !chat) {
-        console.error(`Chat not found: chatId=${chatId}, error=${chatError?.message}`);
+        console.error(`Chat not found: chatId=${chatId}`);
         return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
       }
       newChatId = chat.id;
     }
 
-    console.log(`Fetching image from pollinations.ai with prompt: ${sanitizedPrompt}`);
-    const response = await fetch(`https://image.pollinations.ai/prompt/${encodeURIComponent(sanitizedPrompt)}`, {
-      headers: { 'Content-Type': 'application/json' }
-    });
+    // Save user message first
+    const { error: userMsgError } = await supabase
+      .from('messages')
+      .insert([{
+        chat_id: newChatId,
+        role: 'user',
+        content: sanitizedPrompt,
+        timestamp: new Date().toISOString()
+      }]);
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Image generation error: status=${response.status}, statusText=${response.statusText}, body=${errorText}`);
+    if (userMsgError) {
+      console.warn(`Save user message error: ${userMsgError.message}`);
+    }
+
+    // Generate image URL using pollinations.ai
+    // The API returns a redirect to the actual image, so we follow redirects
+    console.log(`Generating image with prompt: ${sanitizedPrompt}`);
+    
+    // Build the image URL directly - pollinations.ai returns the image itself
+    const encodedPrompt = encodeURIComponent(sanitizedPrompt);
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
+    
+    console.info(`Generated image URL: ${imageUrl}`);
+
+    // Verify the image URL is accessible
+    try {
+      const verifyResponse = await fetch(imageUrl, { 
+        method: 'HEAD',
+        timeout: 10000
+      });
+      
+      if (!verifyResponse.ok) {
+        console.error(`Image URL not accessible: status=${verifyResponse.status}`);
+        return res.status(500).json({
+          error: 'Failed to generate image',
+          code: 'IMAGE_GENERATION_ERROR',
+          details: process.env.NODE_ENV === 'development' ? `Status: ${verifyResponse.status}` : undefined
+        });
+      }
+    } catch (verifyError) {
+      console.error(`Image verification failed: ${verifyError.message}`);
       return res.status(500).json({
-        error: 'Failed to generate image',
-        code: 'IMAGE_GENERATION_ERROR',
-        details: process.env.NODE_ENV === 'development' ? `Status: ${response.status}, Body: ${errorText}` : undefined
+        error: 'Failed to verify image',
+        code: 'IMAGE_VERIFICATION_ERROR',
+        details: process.env.NODE_ENV === 'development' ? verifyError.message : undefined
       });
     }
 
-    const imageUrl = await response.text();
-    console.info(`Raw image URL received: ${imageUrl}`);
-    // Làm sạch imageUrl
-    const cleanImageUrl = imageUrl ? imageUrl.replace(/\\/g, '').trim() : '';
-    console.info(`Cleaned image URL: ${cleanImageUrl}`);
+    // Save AI message with image markdown
+    const messageContent = `![Generated Image](${imageUrl})`;
 
-    // Kiểm tra URL hợp lệ
-    if (!cleanImageUrl || !cleanImageUrl.startsWith('http')) {
-      console.error(`Invalid image URL after cleaning: ${cleanImageUrl}`);
-      return res.status(500).json({
-        error: 'Invalid image URL received',
-        code: 'INVALID_IMAGE_URL',
-        details: process.env.NODE_ENV === 'development' ? `Raw URL: ${imageUrl}, Cleaned URL: ${cleanImageUrl}` : undefined
-      });
-    }
-
-    const messageContent = `![Generated Image](${cleanImageUrl})`;
-
-    console.log(`Saving message to Supabase: chatId=${newChatId}, content=${messageContent}`);
+    console.log(`Saving message to Supabase: chatId=${newChatId}`);
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
       .insert([{
@@ -486,26 +546,28 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       .single();
 
     if (messageError) {
-      console.error(`Save image message error: ${messageError.message}, code: ${messageError.code}, details: ${JSON.stringify(messageError.details)}`);
+      console.error(`Save image message error: ${messageError.message}`);
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
     }
 
+    // Update chat
     console.log(`Updating chat: chatId=${newChatId}`);
     const { error: updateError } = await supabase
       .from('chats')
       .update({
-        last_message: 'Generated image',
+        last_message: `Image: ${sanitizedPrompt.substring(0, 50)}`,
         updated_at: new Date().toISOString()
       })
       .eq('id', newChatId);
 
     if (updateError) {
-      console.warn(`Update chat error: ${updateError.message}, code: ${updateError.code}, details: ${JSON.stringify(updateError.details)}`);
+      console.warn(`Update chat error: ${updateError.message}`);
     }
 
-    console.info(`Image generated: chatId=${newChatId}, userId=${userId}, messageId=${savedMessage.id}`);
+    console.info(`Image generated successfully: chatId=${newChatId}, userId=${userId}, messageId=${savedMessage.id}`);
     res.json({
       message: messageContent,
+      imageUrl: imageUrl,
       messageId: savedMessage.id,
       chatId: newChatId,
       timestamp: savedMessage.timestamp
@@ -524,8 +586,8 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
 app.get('/api/chat/history', authenticateToken, async (req, res) => {
   try {
     const userId = req.user.id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = Math.min(parseInt(req.query.limit) || 10, 50);
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
     const offset = (page - 1) * limit;
 
     console.info(`Fetching chat history: userId=${userId}, page=${page}, limit=${limit}`);
@@ -548,17 +610,17 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
         .select('id, role, content, timestamp')
         .eq('chat_id', chat.id)
         .order('timestamp', { ascending: true })
-        .limit(50);
+        .limit(100);
 
       if (messageError) {
         console.warn(`Messages query error for chat ${chat.id}: ${messageError.message}`);
         return { ...chat, messages: [] };
       }
-      return { ...chat, messages };
+      return { ...chat, messages: messages || [] };
     }));
 
-    console.info(`Chat history retrieved: userId=${userId}, page=${page}, limit=${limit}, chats=${chats.length}`);
-    res.json({ history });
+    console.info(`Chat history retrieved: userId=${userId}, chats=${chats.length}`);
+    res.json({ history, page, limit });
   } catch (err) {
     console.error(`Chat history error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
@@ -582,36 +644,47 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    console.log(`Verifying chat exists: chatId=${chatId}, userId=${userId}`);
+    // Verify chat exists and belongs to user
     const { data: chat, error: chatError } = await supabase
       .from('chats')
       .select('id')
       .eq('id', chatId)
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     if (chatError || !chat) {
-      console.error(`Chat not found: chatId=${chatId}, error=${chatError?.message}`);
+      console.error(`Chat not found: chatId=${chatId}`);
       return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
     }
 
-    console.log(`Executing delete_chat_with_messages: chatId=${chatId}, userId=${userId}`);
-    const { error: transactionError } = await supabase.rpc('delete_chat_with_messages', {
-      p_chat_id: chatId,
-      p_user_id: userId
-    });
+    // Delete messages first (if cascade is not set up)
+    const { error: deleteMessagesError } = await supabase
+      .from('messages')
+      .delete()
+      .eq('chat_id', chatId);
 
-    if (transactionError) {
-      console.error(`Delete chat error: ${transactionError.message}, code: ${transactionError.code}, details: ${JSON.stringify(transactionError.details)}`);
+    if (deleteMessagesError) {
+      console.warn(`Delete messages error: ${deleteMessagesError.message}`);
+    }
+
+    // Delete chat
+    const { error: deleteChatError } = await supabase
+      .from('chats')
+      .delete()
+      .eq('id', chatId)
+      .eq('user_id', userId);
+
+    if (deleteChatError) {
+      console.error(`Delete chat error: ${deleteChatError.message}`);
       return res.status(500).json({
         error: 'Failed to delete chat',
         code: 'DATABASE_ERROR',
-        details: process.env.NODE_ENV === 'development' ? transactionError.message : undefined
+        details: process.env.NODE_ENV === 'development' ? deleteChatError.message : undefined
       });
     }
 
     console.info(`Chat deleted: chatId=${chatId}, userId=${userId}`);
-    res.json({ message: 'Chat deleted successfully' });
+    res.json({ message: 'Chat deleted successfully', chatId });
   } catch (err) {
     console.error(`Delete chat error: ${err.message}, stack: ${err.stack}`);
     res.status(500).json({
@@ -637,7 +710,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       .from('messages')
       .select('chat_id')
       .eq('id', messageId)
-      .single();
+      .maybeSingle();
 
     if (messageError || !message) {
       console.warn(`Message not found: messageId=${messageId}`);
@@ -649,7 +722,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       .select('id')
       .eq('id', message.chat_id)
       .eq('user_id', userId)
-      .single();
+      .maybeSingle();
 
     if (chatError || !chat) {
       console.warn(`Chat not found or unauthorized: chatId=${message.chat_id}, userId=${userId}`);
@@ -666,13 +739,14 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? deleteError.message : undefined });
     }
 
+    // Update chat's last_message
     const { data: lastMessage, error: lastMessageError } = await supabase
       .from('messages')
       .select('content')
       .eq('chat_id', message.chat_id)
       .order('timestamp', { ascending: false })
       .limit(1)
-      .single();
+      .maybeSingle();
 
     if (!lastMessageError && lastMessage) {
       await supabase
@@ -709,6 +783,16 @@ app.use('*', (req, res) => {
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(`Unhandled error: ${err.message}, stack: ${err.stack}`);
+  
+  // Handle CORS errors
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      error: 'CORS error',
+      code: 'CORS_ERROR',
+      message: 'Origin not allowed'
+    });
+  }
+  
   res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_SERVER_ERROR',
@@ -719,9 +803,22 @@ app.use((err, req, res, next) => {
 // Graceful shutdown
 const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`Server started on port ${process.env.PORT || 3001}`);
+  console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
+  console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
 });
 
 process.on('SIGTERM', () => {
-  console.info('SIGTERM received, shutting down');
-  server.close(() => process.exit(0));
+  console.info('SIGTERM received, shutting down gracefully');
+  server.close(() => {
+    console.info('Server closed');
+    process.exit(0);
+  });
+});
+
+process.on('SIGINT', () => {
+  console.info('SIGINT received, shutting down gracefully');
+  server.close(() => {
+    console.info('Server closed');
+    process.exit(0);
+  });
 });
