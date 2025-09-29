@@ -1,5 +1,5 @@
 // src/services/api.js
-const API_BASE_URL = 'https://test-d9o3.onrender.com/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://test-d9o3.onrender.com/api';
 const DEFAULT_TIMEOUT_MS = 30000; // 30 seconds for general requests
 
 console.log('API_BASE_URL:', API_BASE_URL);
@@ -65,6 +65,7 @@ class ApiService {
             localStorage.removeItem('token');
             localStorage.removeItem('userName');
             localStorage.removeItem('userEmail');
+            window.location.href = '/login'; // Redirect to login on auth error
           }
           throw new Error(data.error || `HTTP ${response.status}`);
         }
