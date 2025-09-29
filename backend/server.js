@@ -7,33 +7,19 @@ import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import cors from 'cors';
 import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import xss from 'xss';
-import winston from 'winston';
 import { validate } from 'uuid';
 
 const { default: cheerio } = await import('cheerio');
 
 dotenv.config();
 
-// Initialize logger
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'combined.log' })
-  ]
-});
-
 // Validate environment variables
 const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
-    logger.error(`Missing required environment variable: ${envVar}`);
+    console.error(`Missing required environment variable: ${envVar}`);
     process.exit(1);
   }
 }
@@ -60,6 +46,22 @@ app.use(helmet({
   }
 }));
 
+// Rate limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests
+  message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 requests
+  message: { error: 'Too many login/register attempts, please try again after 15 minutes' },
+  skipSuccessfulRequests: true
+});
+
 // CORS configuration
 const allowedOrigins = [
   'https://hein1.onrender.com',
@@ -78,7 +80,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);
     } else {
-      logger.warn(`CORS blocked: ${origin}`);
+      console.warn(`CORS blocked: ${origin}`);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -89,6 +91,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(generalLimiter);
 
 // Sanitize input utility
 function sanitizeInput(input) {
@@ -116,13 +119,13 @@ function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) {
-    logger.warn(`No token provided for ${req.method} ${req.originalUrl}`);
+    console.warn(`No token provided for ${req.method} ${req.originalUrl}`);
     return res.status(401).json({ error: 'No token provided', code: 'NO_TOKEN' });
   }
 
   jwt.verify(token, jwtSecret, (err, user) => {
     if (err) {
-      logger.warn(`Invalid token for ${req.method} ${req.originalUrl}: ${err.message}`);
+      console.warn(`Invalid token for ${req.method} ${req.originalUrl}: ${err.message}`);
       return res.status(403).json({ error: 'Invalid token', code: 'INVALID_TOKEN' });
     }
     req.user = user;
@@ -151,7 +154,7 @@ app.get('/health', async (req, res) => {
       dependencies: { supabase: 'connected', openRouter: 'connected' }
     });
   } catch (error) {
-    logger.error(`Health check failed: ${error.message}`);
+    console.error(`Health check failed: ${error.message}`);
     res.status(503).json({
       status: 'ERROR',
       error: 'Service unhealthy',
@@ -161,7 +164,7 @@ app.get('/health', async (req, res) => {
 });
 
 // Register endpoint
-app.post('/api/register', async (req, res) => {
+app.post('/api/register', authLimiter, async (req, res) => {
   try {
     const { email, password, name } = req.body;
     if (!email || !password || !name) {
@@ -189,18 +192,18 @@ app.post('/api/register', async (req, res) => {
       .single();
 
     if (error) {
-      logger.error(`Register error: ${error.message}`);
+      console.error(`Register error: ${error.message}`);
       return res.status(500).json({ error: 'Registration failed', code: 'DATABASE_ERROR' });
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
-    logger.info(`User registered: ${sanitizedEmail}`);
+    console.info(`User registered: ${sanitizedEmail}`);
     res.status(201).json({
       token,
       user: { id: user.id, email: user.email, name: user.name }
     });
   } catch (err) {
-    logger.error(`Register error: ${err.message}`);
+    console.error(`Register error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -210,7 +213,7 @@ app.post('/api/register', async (req, res) => {
 });
 
 // Login endpoint
-app.post('/api/login', async (req, res) => {
+app.post('/api/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -234,13 +237,13 @@ app.post('/api/login', async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
-    logger.info(`User logged in: ${sanitizedEmail}`);
+    console.info(`User logged in: ${sanitizedEmail}`);
     res.json({
       token,
       user: { id: user.id, email: user.email, name: user.name }
     });
   } catch (err) {
-    logger.error(`Login error: ${err.message}`);
+    console.error(`Login error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -273,7 +276,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         .single();
 
       if (chatError) {
-        logger.error(`Create chat error: ${chatError.message}`);
+        console.error(`Create chat error: ${chatError.message}`);
         return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR' });
       }
       newChatId = chat.id;
@@ -307,7 +310,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     if (!response.ok) {
       const errorData = await response.json();
-      logger.error(`OpenRouter error: ${errorData.error || response.statusText}`);
+      console.error(`OpenRouter error: ${errorData.error || response.statusText}`);
       return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR' });
     }
 
@@ -326,7 +329,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       .single();
 
     if (messageError) {
-      logger.error(`Save message error: ${messageError.message}`);
+      console.error(`Save message error: ${messageError.message}`);
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
@@ -340,10 +343,10 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       .eq('id', newChatId);
 
     if (updateError) {
-      logger.warn(`Update chat error: ${updateError.message}`);
+      console.warn(`Update chat error: ${updateError.message}`);
     }
 
-    logger.info(`Chat message processed: chatId=${newChatId}, userId=${userId}`);
+    console.info(`Chat message processed: chatId=${newChatId}, userId=${userId}`);
     res.json({
       message: aiMessage,
       messageId: savedMessage.id,
@@ -351,7 +354,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       timestamp: savedMessage.timestamp
     });
   } catch (err) {
-    logger.error(`Chat error: ${err.message}`);
+    console.error(`Chat error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -384,7 +387,7 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
         .single();
 
       if (chatError) {
-        logger.error(`Create chat error: ${chatError.message}`);
+        console.error(`Create chat error: ${chatError.message}`);
         return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR' });
       }
       newChatId = chat.id;
@@ -406,7 +409,7 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
     });
 
     if (!response.ok) {
-      logger.error(`Image generation error: ${response.statusText}`);
+      console.error(`Image generation error: ${response.statusText}`);
       return res.status(500).json({ error: 'Failed to generate image', code: 'IMAGE_GENERATION_ERROR' });
     }
 
@@ -425,7 +428,7 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       .single();
 
     if (messageError) {
-      logger.error(`Save image message error: ${messageError.message}`);
+      console.error(`Save image message error: ${messageError.message}`);
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
@@ -438,10 +441,10 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       .eq('id', newChatId);
 
     if (updateError) {
-      logger.warn(`Update chat error: ${updateError.message}`);
+      console.warn(`Update chat error: ${updateError.message}`);
     }
 
-    logger.info(`Image generated: chatId=${newChatId}, userId=${userId}`);
+    console.info(`Image generated: chatId=${newChatId}, userId=${userId}`);
     res.json({
       message: messageContent,
       messageId: savedMessage.id,
@@ -449,7 +452,7 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
       timestamp: savedMessage.timestamp
     });
   } catch (err) {
-    logger.error(`Image generation error: ${err.message}`);
+    console.error(`Image generation error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -474,7 +477,7 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
       .range(offset, offset + limit - 1);
 
     if (chatError) {
-      logger.error(`Get chat history error: ${chatError.message}`);
+      console.error(`Get chat history error: ${chatError.message}`);
       return res.status(500).json({ error: 'Failed to fetch chat history', code: 'DATABASE_ERROR' });
     }
 
@@ -487,16 +490,16 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
         .limit(50);
 
       if (messageError) {
-        logger.warn(`Get messages error for chat ${chat.id}: ${messageError.message}`);
+        console.warn(`Get messages error for chat ${chat.id}: ${messageError.message}`);
         return { ...chat, messages: [] };
       }
       return { ...chat, messages };
     }));
 
-    logger.info(`Chat history retrieved: userId=${userId}, page=${page}, limit=${limit}`);
+    console.info(`Chat history retrieved: userId=${userId}, page=${page}, limit=${limit}`);
     res.json({ history });
   } catch (err) {
-    logger.error(`Chat history error: ${err.message}`);
+    console.error(`Chat history error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -521,17 +524,17 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
     });
 
     if (transactionError) {
-      logger.error(`Delete chat error: ${transactionError.message}`);
+      console.error(`Delete chat error: ${transactionError.message}`);
       return res.status(500).json({
         error: 'Failed to delete chat',
         code: 'DATABASE_ERROR'
       });
     }
 
-    logger.info(`Chat deleted: chatId=${chatId}, userId=${userId}`);
+    console.info(`Chat deleted: chatId=${chatId}, userId=${userId}`);
     res.json({ message: 'Chat deleted successfully' });
   } catch (err) {
-    logger.error(`Delete chat error: ${err.message}`);
+    console.error(`Delete chat error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -557,7 +560,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       .single();
 
     if (messageError || !message) {
-      logger.warn(`Message not found: messageId=${messageId}`);
+      console.warn(`Message not found: messageId=${messageId}`);
       return res.status(404).json({ error: 'Message not found', code: 'MESSAGE_NOT_FOUND' });
     }
 
@@ -569,7 +572,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       .single();
 
     if (chatError || !chat) {
-      logger.warn(`Chat not found or unauthorized: chatId=${message.chat_id}, userId=${userId}`);
+      console.warn(`Chat not found or unauthorized: chatId=${message.chat_id}, userId=${userId}`);
       return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND' });
     }
 
@@ -579,7 +582,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       .eq('id', messageId);
 
     if (deleteError) {
-      logger.error(`Delete message error: ${deleteError.message}`);
+      console.error(`Delete message error: ${deleteError.message}`);
       return res.status(500).json({ error: 'Failed to delete message', code: 'DATABASE_ERROR' });
     }
 
@@ -601,10 +604,10 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
         .eq('id', message.chat_id);
     }
 
-    logger.info(`Message deleted: messageId=${messageId}, userId=${userId}`);
+    console.info(`Message deleted: messageId=${messageId}, userId=${userId}`);
     res.json({ message: 'Message deleted successfully', messageId });
   } catch (err) {
-    logger.error(`Delete message error: ${err.message}`);
+    console.error(`Delete message error: ${err.message}`);
     res.status(500).json({
       error: 'Server error',
       code: 'SERVER_ERROR',
@@ -615,7 +618,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
 
 // 404 handler
 app.use('*', (req, res) => {
-  logger.warn(`Route not found: ${req.method} ${req.originalUrl}`);
+  console.warn(`Route not found: ${req.method} ${req.originalUrl}`);
   res.status(404).json({
     error: 'Endpoint not found',
     code: 'ENDPOINT_NOT_FOUND',
@@ -625,7 +628,7 @@ app.use('*', (req, res) => {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  logger.error(`Unhandled error: ${err.message}`, { stack: err.stack });
+  console.error(`Unhandled error: ${err.message}`, { stack: err.stack });
   res.status(500).json({
     error: 'Internal server error',
     code: 'INTERNAL_SERVER_ERROR',
@@ -635,10 +638,10 @@ app.use((err, req, res, next) => {
 
 // Graceful shutdown
 const server = app.listen(process.env.PORT || 3001, () => {
-  logger.info(`Server started on port ${process.env.PORT || 3001}`);
+  console.info(`Server started on port ${process.env.PORT || 3001}`);
 });
 
 process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down');
+  console.info('SIGTERM received, shutting down');
   server.close(() => process.exit(0));
 });
