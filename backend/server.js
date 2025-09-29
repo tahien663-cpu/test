@@ -1,4 +1,3 @@
-// server.js
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -8,9 +7,8 @@ import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import cors from 'cors';
 import helmet from 'helmet';
-import rateLimit from 'express-rate-limit';
-import xss from 'xss';
 import { RateLimiterMemory } from 'rate-limiter-flexible';
+import xss from 'xss';
 import winston from 'winston';
 import { validate } from 'uuid';
 
@@ -63,25 +61,31 @@ app.use(helmet({
   }
 }));
 
-// Rate limiting
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
-  standardHeaders: true,
-  legacyHeaders: false
+// Rate limiting with rate-limiter-flexible
+const generalLimiter = new RateLimiterMemory({
+  points: 100, // 100 requests
+  duration: 15 * 60, // 15 minutes
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: { error: 'Too many login/register attempts, please try again after 15 minutes' },
-  skipSuccessfulRequests: true
+const authLimiter = new RateLimiterMemory({
+  points: 5, // 5 requests
+  duration: 15 * 60, // 15 minutes
 });
 
 const chatLimiter = new RateLimiterMemory({
   points: 20,
   duration: 60,
+});
+
+// Apply general limiter
+app.use((req, res, next) => {
+  generalLimiter
+    .consume(req.ip)
+    .then(() => next())
+    .catch(() => {
+      logger.warn(`Too many requests from ${req.ip}`);
+      res.status(429).json({ error: 'Too many requests from this IP, please try again after 15 minutes' });
+    });
 });
 
 // CORS configuration
@@ -113,7 +117,6 @@ app.use(cors({
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-app.use(generalLimiter);
 
 // Sanitize input utility
 function sanitizeInput(input) {
@@ -155,6 +158,17 @@ function authenticateToken(req, res, next) {
   });
 }
 
+// Apply auth limiter to register and login routes
+const authMiddleware = (req, res, next) => {
+  authLimiter
+    .consume(req.ip)
+    .then(() => next())
+    .catch(() => {
+      logger.warn(`Too many auth attempts from ${req.ip}`);
+      res.status(429).json({ error: 'Too many login/register attempts, please try again after 15 minutes' });
+    });
+};
+
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
@@ -186,7 +200,7 @@ app.get('/health', async (req, res) => {
 });
 
 // Register endpoint
-app.post('/api/register', authLimiter, async (req, res) => {
+app.post('/api/register', authMiddleware, async (req, res) => {
   try {
     const { email, password, name } = req.body;
     if (!email || !password || !name) {
@@ -235,7 +249,7 @@ app.post('/api/register', authLimiter, async (req, res) => {
 });
 
 // Login endpoint
-app.post('/api/login', authLimiter, async (req, res) => {
+app.post('/api/login', authMiddleware, async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
