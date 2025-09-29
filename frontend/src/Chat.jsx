@@ -150,8 +150,8 @@ export default function Chat() {
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
         .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-        .replace/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
+        .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
+        .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
@@ -166,7 +166,7 @@ export default function Chat() {
       return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
     } catch (err) {
       console.error('Markdown parse error:', err);
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(>/g, '&gt;');
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
   }, []);
 
@@ -766,8 +766,8 @@ export default function Chat() {
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
         .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-        .replace(/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
+        .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
+        .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
@@ -785,4 +785,4 @@ export default function Chat() {
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
   }
-}
+};
