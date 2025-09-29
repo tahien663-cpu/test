@@ -16,14 +16,20 @@ class ApiService {
   }
 
   getToken() {
-    return localStorage.getItem('token');
+    const token = localStorage.getItem('token');
+    console.log('Retrieved token:', token ? 'Present' : 'Missing');
+    return token;
   }
 
   getHeaders(includeAuth = true) {
     const headers = { 'Content-Type': 'application/json' };
     if (includeAuth) {
       const token = this.getToken();
-      if (token) headers['Authorization'] = `Bearer ${token}`;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      } else {
+        console.warn('No token available for authenticated request');
+      }
     }
     return headers;
   }
@@ -62,6 +68,7 @@ class ApiService {
           }
 
           if (response.status === 401 || response.status === 403) {
+            console.warn('Authentication error, clearing local storage and redirecting to login');
             localStorage.removeItem('token');
             localStorage.removeItem('userName');
             localStorage.removeItem('userEmail');
@@ -75,7 +82,9 @@ class ApiService {
         }
 
         try {
-          return JSON.parse(text);
+          const parsed = JSON.parse(text);
+          console.log(`Response from ${url}:`, parsed);
+          return parsed;
         } catch {
           throw new Error('Invalid JSON response from server');
         }
@@ -110,6 +119,7 @@ class ApiService {
       body: JSON.stringify({ email, password }),
       includeAuth: false,
     });
+    console.log('Login response:', data);
     localStorage.setItem('token', data.token);
     localStorage.setItem('userName', data.user.name);
     localStorage.setItem('userEmail', data.user.email);
@@ -122,6 +132,7 @@ class ApiService {
       body: JSON.stringify({ email, password, name }),
       includeAuth: false,
     });
+    console.log('Register response:', data);
     return data;
   }
 
@@ -130,42 +141,54 @@ class ApiService {
       method: 'PUT',
       body: JSON.stringify({ name, email }),
     });
+    console.log('Update profile response:', data);
     localStorage.setItem('userName', data.user.name);
     localStorage.setItem('userEmail', data.user.email);
     return data;
   }
 
   async changePassword({ currentPassword, newPassword }) {
-    return this.request('/password', {
+    const data = await this.request('/password', {
       method: 'PUT',
       body: JSON.stringify({ currentPassword, newPassword }),
     });
+    console.log('Change password response:', data);
+    return data;
   }
 
   async deleteAccount() {
     const data = await this.request('/account', { method: 'DELETE' });
+    console.log('Delete account response:', data);
     localStorage.clear();
     return data;
   }
 
   async getChatHistory() {
-    return this.request('/chat/history', { method: 'GET' });
+    const data = await this.request('/chat/history', { method: 'GET' });
+    console.log('Chat history response:', data);
+    return data;
   }
 
   async deleteChat(chatId) {
-    return this.request(`/chat/${chatId}`, { method: 'DELETE' });
+    const data = await this.request(`/chat/${chatId}`, { method: 'DELETE' });
+    console.log('Delete chat response:', data);
+    return data;
   }
 
   async deleteMessage(messageId) {
-    return this.request(`/message/${messageId}`, { method: 'DELETE' });
+    const data = await this.request(`/message/${messageId}`, { method: 'DELETE' });
+    console.log('Delete message response:', data);
+    return data;
   }
 
   async generateImage(options) {
-    return this.request('/generate-image', {
+    const data = await this.request('/generate-image', {
       method: 'POST',
       body: JSON.stringify(options),
       timeoutMs: 60000 // 60 seconds for image generation
     });
+    console.log('Generate image response:', data);
+    return data;
   }
 }
 
