@@ -313,7 +313,7 @@ export default function Chat() {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
         content: data.message,
-        imageUrl: data.imageUrl, // Store imageUrl separately for rendering
+        imageUrl: data.imageUrl,
         timestamp: data.timestamp || new Date().toISOString()
       };
       setMessages(prev => [...prev, aiMessage]);
@@ -659,21 +659,17 @@ export default function Chat() {
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
         .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
-        .replace(/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>')
+        .replace/(?<!\*)\*([^\*]+)\*(?!\*)/g, '<em class="italic">$1</em>')
+        .replace/(?<!_)_([^_]+)_(?!_)/g, '<em class="italic">$1</em>'
         .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
         .replace(/\n/g, '<br>')
         .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
-        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (match, alt, src) => {
-          return `<img src="${DOMPurify.sanitize(src)}" alt="${DOMPurify.sanitize(alt)}" class="max-w-full rounded-lg my-2 shadow-lg" loading="lazy">`;
-        });
-      return DOMPurify.sanitize(html, { 
-        ADD_TAGS: ['img', 'iframe'], 
-        ADD_ATTR: ['src', 'alt', 'target', 'rel', 'loading', 'allowfullscreen']
-      });
+        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
+
+      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
     } catch (err) {
       console.error('Markdown parse error:', err);
-      return DOMPurify.sanitize(text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
   }
 }
