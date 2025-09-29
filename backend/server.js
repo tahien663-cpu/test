@@ -7,7 +7,6 @@ import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import cors from 'cors';
 import helmet from 'helmet';
-import { RateLimiterMemory } from 'rate-limiter-flexible';
 import xss from 'xss';
 import winston from 'winston';
 import { validate } from 'uuid';
@@ -60,33 +59,6 @@ app.use(helmet({
     }
   }
 }));
-
-// Rate limiting with rate-limiter-flexible
-const generalLimiter = new RateLimiterMemory({
-  points: 100, // 100 requests
-  duration: 15 * 60, // 15 minutes
-});
-
-const authLimiter = new RateLimiterMemory({
-  points: 5, // 5 requests
-  duration: 15 * 60, // 15 minutes
-});
-
-const chatLimiter = new RateLimiterMemory({
-  points: 20,
-  duration: 60,
-});
-
-// Apply general limiter
-app.use((req, res, next) => {
-  generalLimiter
-    .consume(req.ip)
-    .then(() => next())
-    .catch(() => {
-      logger.warn(`Too many requests from ${req.ip}`);
-      res.status(429).json({ error: 'Too many requests from this IP, please try again after 15 minutes' });
-    });
-});
 
 // CORS configuration
 const allowedOrigins = [
@@ -158,17 +130,6 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// Apply auth limiter to register and login routes
-const authMiddleware = (req, res, next) => {
-  authLimiter
-    .consume(req.ip)
-    .then(() => next())
-    .catch(() => {
-      logger.warn(`Too many auth attempts from ${req.ip}`);
-      res.status(429).json({ error: 'Too many login/register attempts, please try again after 15 minutes' });
-    });
-};
-
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
@@ -200,7 +161,7 @@ app.get('/health', async (req, res) => {
 });
 
 // Register endpoint
-app.post('/api/register', authMiddleware, async (req, res) => {
+app.post('/api/register', async (req, res) => {
   try {
     const { email, password, name } = req.body;
     if (!email || !password || !name) {
@@ -249,7 +210,7 @@ app.post('/api/register', authMiddleware, async (req, res) => {
 });
 
 // Login endpoint
-app.post('/api/login', authMiddleware, async (req, res) => {
+app.post('/api/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password) {
@@ -291,7 +252,6 @@ app.post('/api/login', authMiddleware, async (req, res) => {
 // Chat endpoint
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
-    await chatLimiter.consume(req.ip);
     const { messages, chatId } = req.body;
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Invalid messages format', code: 'INVALID_INPUT' });
@@ -403,7 +363,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 // Image generation endpoint
 app.post('/api/generate-image', authenticateToken, async (req, res) => {
   try {
-    await chatLimiter.consume(req.ip);
     const { prompt, chatId } = req.body;
     if (!prompt) {
       return res.status(400).json({ error: 'Missing prompt', code: 'INVALID_INPUT' });
