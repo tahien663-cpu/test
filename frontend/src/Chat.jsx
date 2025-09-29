@@ -2,9 +2,8 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Send, Bot, User, Loader2, Menu, Plus, MessageSquare, 
-  Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, 
-  Globe, StopCircle, RefreshCw, Image, ChevronDown
+  Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, 
+  Globe, Image, ChevronDown
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
@@ -26,12 +25,12 @@ const ImageMessage = ({ src, alt, onLoad, onError }) => {
         className="max-w-full rounded-lg shadow-lg"
         onLoad={() => {
           setIsLoading(false);
-          if (onLoad) onLoad();
+          onLoad?.();
         }}
         onError={() => {
           setIsLoading(false);
           setHasError(true);
-          if (onError) onError();
+          onError?.();
         }}
         style={{ display: isLoading || hasError ? 'none' : 'block' }}
       />
@@ -59,11 +58,22 @@ export default function Chat() {
   const [userName, setUserName] = useState(() => localStorage.getItem('userName') || 'Bạn');
   const [chatHistory, setChatHistory] = useState([]);
   const [showActionDropdown, setShowActionDropdown] = useState(false);
+  const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const abortControllerRef = useRef(null);
   const dropdownRef = useRef(null);
   const messagesContainerRef = useRef(null);
+
+  // Cleanup on component unmount
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
+  }, []);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -72,7 +82,6 @@ export default function Chat() {
         setShowActionDropdown(false);
       }
     };
-
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
@@ -81,18 +90,21 @@ export default function Chat() {
   useEffect(() => {
     const handleCopy = (e) => {
       if (e.target.classList.contains('copy-code-btn')) {
-        const codeElement = e.target.previousSibling.querySelector('code');
+        const codeElement = e.target.previousSibling?.querySelector('code');
         if (codeElement) {
           navigator.clipboard.writeText(codeElement.textContent)
             .then(() => {
               const originalText = e.target.textContent;
               e.target.textContent = 'Copied!';
+              e.target.disabled = true;
               setTimeout(() => {
                 e.target.textContent = originalText;
+                e.target.disabled = false;
               }, 2000);
             })
             .catch(err => {
               console.error('Copy error:', err);
+              setError('Failed to copy code. Please try again.');
             });
         }
       }
@@ -102,7 +114,6 @@ export default function Chat() {
     if (container) {
       container.addEventListener('click', handleCopy);
     }
-
     return () => {
       if (container) {
         container.removeEventListener('click', handleCopy);
@@ -110,31 +121,7 @@ export default function Chat() {
     };
   }, []);
 
-  // Retry API call with exponential backoff
-  const retryFetch = useCallback(async (url, options, maxRetries = 3, initialDelay = 1000) => {
-    for (let attempt = 1; attempt <= maxRetries; attempt++) {
-      try {
-        abortControllerRef.current = new AbortController();
-        options.signal = abortControllerRef.current.signal;
-        const response = await fetch(url, options);
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          throw new Error(errorData.error || `HTTP ${response.status}`);
-        }
-        return response;
-      } catch (err) {
-        if (err.name === 'AbortError') {
-          console.log('Yêu cầu bị hủy');
-          return null;
-        }
-        if (attempt === maxRetries) throw err;
-        console.warn(`Retry ${attempt}/${maxRetries} for ${url}: ${err.message}`);
-        await new Promise(resolve => setTimeout(resolve, initialDelay * Math.pow(2, attempt - 1)));
-      }
-    }
-  }, []);
-
-  // Enhanced markdown parser with error handling
+  // Enhanced markdown parser with safer sanitization
   const parseMarkdown = useCallback((text) => {
     if (!text || typeof text !== 'string') return '';
     
@@ -145,7 +132,7 @@ export default function Chat() {
         .replace(/>/g, '&gt;')
         .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
           const langClass = lang ? ` language-${lang}` : '';
-          return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
+          return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
         })
         .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
         .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
@@ -163,14 +150,17 @@ export default function Chat() {
         .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
         .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
 
-      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
+      return DOMPurify.sanitize(html, { 
+        ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'br', 'p'],
+        ALLOWED_ATTR: ['href', 'target', 'rel', 'src', 'alt', 'class']
+      });
     } catch (err) {
       console.error('Markdown parse error:', err);
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
   }, []);
 
-  // Load chat history
+  // Load chat history with debouncing
   const loadChatHistory = useCallback(async () => {
     try {
       const data = await apiService.getChatHistory();
@@ -180,34 +170,38 @@ export default function Chat() {
       }
     } catch (err) {
       console.error('Load history error:', err.message);
+      setError('Failed to load chat history. Please try again.');
       if (err.message.includes('401') || err.message.includes('403')) {
         localStorage.removeItem('token');
+        localStorage.removeItem('userName');
+        localStorage.removeItem('userEmail');
         navigate('/login');
       }
     }
-  }, [navigate]);
+  }, [navigate, currentChatId]);
 
   useEffect(() => {
     loadChatHistory();
   }, [loadChatHistory]);
 
-  // Load specific chat from history
+  // Load specific chat
   const loadChat = useCallback((id) => {
     const selectedChat = chatHistory.find(chat => chat.id === id);
     if (selectedChat) {
-      setMessages(selectedChat.messages || []);
+      setMessages(selectedChat.messages || [messages[0]]);
       setCurrentChatId(id);
     }
   }, [chatHistory]);
 
+  // Fix race condition in chat loading
   useEffect(() => {
-    if (currentChatId) {
+    if (currentChatId && chatHistory.length > 0) {
       loadChat(currentChatId);
     }
-  }, [currentChatId, loadChat, chatHistory]);
+  }, [currentChatId, chatHistory, loadChat]);
 
   // Format timestamp
-  const formatTimestamp = useMemo(() => (timestamp) => {
+  const formatTimestamp = useCallback((timestamp) => {
     const date = new Date(timestamp);
     const today = new Date();
     const yesterday = new Date(today);
@@ -217,9 +211,8 @@ export default function Chat() {
       return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     } else if (date.toDateString() === yesterday.toDateString()) {
       return 'Hôm qua ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    } else {
-      return date.toLocaleDateString('vi-VN') + ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
     }
+    return date.toLocaleDateString('vi-VN') + ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
   }, []);
 
   // Group chat history by date
@@ -317,6 +310,7 @@ export default function Chat() {
         content: 'Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.',
         timestamp: new Date().toISOString()
       }]);
+      setError('Message too long. Maximum 500 characters.');
       return;
     }
 
@@ -331,12 +325,15 @@ export default function Chat() {
     setInput('');
     setIsLoading(true);
     setShowActionDropdown(false);
+    setError(null);
 
     try {
-      const data = await retryFetch(() => apiService.request('/chat', {
+      abortControllerRef.current = new AbortController();
+      const data = await apiService.request('/chat', {
         method: 'POST',
-        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId })
-      }));
+        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId }),
+        signal: abortControllerRef.current.signal
+      });
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
@@ -351,23 +348,30 @@ export default function Chat() {
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.error('Send message error:', err.message);
+        const errorMessage = err.message.includes('401') || err.message.includes('403')
+          ? 'Session expired. Please log in again.'
+          : 'Failed to send message. Please try again.';
+        setError(errorMessage);
         setMessages(prev => [...prev, {
           id: Date.now().toString(),
           role: 'ai',
-          content: '**Ôi zời, lỗi rồi!** Thử lại sau nhé? 😅',
+          content: `**Error**: ${errorMessage}`,
           timestamp: new Date().toISOString()
         }]);
         if (err.message.includes('401') || err.message.includes('403')) {
           localStorage.removeItem('token');
+          localStorage.removeItem('userName');
+          localStorage.removeItem('userEmail');
           navigate('/login');
         }
       }
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
-  }, [input, isLoading, currentChatId, messages, retryFetch, loadChatHistory, navigate]);
+  }, [input, isLoading, currentChatId, messages, loadChatHistory, navigate]);
 
-  // Handle web search - prepend to prompt to trigger tool
+  // Handle web search
   const handleWebSearch = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     setShowActionDropdown(false);
@@ -391,12 +395,16 @@ export default function Chat() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+    setError(null);
 
     try {
-      const data = await retryFetch(() => apiService.request('/generate-image', {
+      abortControllerRef.current = new AbortController();
+      const data = await apiService.request('/generate-image', {
         method: 'POST',
-        body: JSON.stringify({ prompt: input, chatId: currentChatId })
-      }));
+        body: JSON.stringify({ prompt: input, chatId: currentChatId }),
+        signal: abortControllerRef.current.signal,
+        timeoutMs: 30000 // Reduced timeout
+      });
       const aiMessage = {
         id: data.messageId || Date.now().toString(),
         role: 'ai',
@@ -409,28 +417,37 @@ export default function Chat() {
       }
       await loadChatHistory();
     } catch (err) {
-      console.error('Generate image error:', err.message);
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        role: 'ai',
-        content: '**Ôi zời, lỗi tạo ảnh rồi!** Thử lại sau nhé? 😅',
-        timestamp: new Date().toISOString()
-      }]);
-      if (err.message.includes('401') || err.message.includes('403')) {
-        localStorage.removeItem('token');
-        navigate('/login');
+      if (err.name !== 'AbortError') {
+        console.error('Generate image error:', err.message);
+        const errorMessage = err.message.includes('401') || err.message.includes('403')
+          ? 'Session expired. Please log in again.'
+          : 'Failed to generate image. Please try again.';
+        setError(errorMessage);
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'ai',
+          content: `**Error**: ${errorMessage}`,
+          timestamp: new Date().toISOString()
+        }]);
+        if (err.message.includes('401') || err.message.includes('403')) {
+          localStorage.removeItem('token');
+          localStorage.removeItem('userName');
+          localStorage.removeItem('userEmail');
+          navigate('/login');
+        }
       }
     } finally {
       setIsLoading(false);
+      abortControllerRef.current = null;
     }
-  }, [input, isLoading, currentChatId, retryFetch, loadChatHistory, navigate]);
+  }, [input, isLoading, currentChatId, loadChatHistory, navigate]);
 
   // Delete chat
   const deleteChat = useCallback(async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
 
     try {
-      await apiService.request(`/chat/${id}`, { method: 'DELETE' });
+      await apiService.deleteChat(id);
       setChatHistory(prev => prev.filter(chat => chat.id !== id));
       if (currentChatId === id) {
         setCurrentChatId(null);
@@ -438,17 +455,19 @@ export default function Chat() {
       }
     } catch (err) {
       console.error('Delete chat error:', err.message);
+      setError('Failed to delete chat. Please try again.');
     }
   }, [currentChatId, messages]);
 
   // Delete message
   const deleteMessage = useCallback(async (messageId) => {
     try {
-      await apiService.request(`/message/${messageId}`, { method: 'DELETE' });
+      await apiService.deleteMessage(messageId);
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
       await loadChatHistory();
     } catch (err) {
       console.error('Delete message error:', err.message);
+      setError('Failed to delete message. Please try again.');
     }
   }, [loadChatHistory]);
 
@@ -456,6 +475,7 @@ export default function Chat() {
   const newChat = useCallback(() => {
     setCurrentChatId(null);
     setMessages([messages[0]]);
+    setError(null);
   }, [messages]);
 
   // Toggle theme
@@ -466,10 +486,22 @@ export default function Chat() {
     document.documentElement.classList.toggle('dark', newTheme === 'dark');
   }, [theme]);
 
-  // Scroll to bottom
+  // Scroll to bottom with user scroll detection
+  const scrollToBottom = useCallback(() => {
+    if (messagesEndRef.current) {
+      const container = messagesContainerRef.current;
+      if (container) {
+        const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
+        if (isAtBottom) {
+          messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }
+    }
+  }, []);
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    scrollToBottom();
+  }, [messages, scrollToBottom]);
 
   // Theme effect
   useEffect(() => {
@@ -481,15 +513,12 @@ export default function Chat() {
       {/* Sidebar */}
       <div className={`fixed inset-y-0 left-0 z-30 w-64 transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${theme === 'light' ? 'bg-white border-r border-gray-200' : 'bg-gray-800 border-r border-gray-700'}`}>
         <div className="flex h-full flex-col">
-          {/* Sidebar Header */}
           <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
             <h2 className="text-xl font-bold">Lịch sử chat</h2>
             <button onClick={newChat} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
               <Plus className="w-5 h-5" />
             </button>
           </div>
-
-          {/* Search */}
           <div className="p-4">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
@@ -502,8 +531,6 @@ export default function Chat() {
               />
             </div>
           </div>
-
-          {/* Chat History */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             {Object.entries(groupedHistory).map(([date, chats]) => (
               <div key={date}>
@@ -536,8 +563,6 @@ export default function Chat() {
               </div>
             ))}
           </div>
-
-          {/* Sidebar Footer */}
           <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
             <button 
               onClick={() => navigate('/home')}
@@ -566,7 +591,6 @@ export default function Chat() {
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col min-w-0">
-        {/* Navbar */}
         <nav className="fixed top-0 left-0 right-0 z-20 bg-gradient-to-r from-sky-500/70 to-indigo-600/70 backdrop-blur-md border-b border-white/10 shadow-xl px-4 py-3 md:px-6 lg:px-8">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-4">
@@ -595,6 +619,11 @@ export default function Chat() {
 
         {/* Messages */}
         <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 pt-20 pb-32">
+          {error && (
+            <div className="p-4 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg">
+              {error}
+            </div>
+          )}
           {messages.map((msg) => (
             <div 
               key={msg.id}
@@ -658,11 +687,12 @@ export default function Chat() {
                 rows={1}
                 style={{ 
                   height: 'auto',
-                  minHeight: '3rem'
+                  minHeight: '3rem',
+                  transition: 'height 0.2s ease-in-out'
                 }}
                 onInput={(e) => {
                   e.target.style.height = 'auto';
-                  e.target.style.height = Math.min(e.target.scrollHeight, 192) + 'px';
+                  e.target.style.height = `${Math.min(e.target.scrollHeight, 192)}px`;
                 }}
               />
               {!isLoading && input.trim() && (
@@ -691,11 +721,20 @@ export default function Chat() {
                 </div>
               )}
               <div className="absolute right-3 top-3 flex gap-2" ref={dropdownRef}>
+                {isLoading && (
+                  <button
+                    onClick={stopGeneration}
+                    className={`p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all duration-200`}
+                    title="Stop"
+                  >
+                    <StopCircle className="w-5 h-5" />
+                  </button>
+                )}
                 {!isLoading && input.trim() && (
                   <div className="relative">
                     <button
                       onClick={() => setShowActionDropdown(!showActionDropdown)}
-                      className={`p-2 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'}`}
+                      className={`p-2 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
                       title="Thêm tùy chọn"
                     >
                       <ChevronDown className="w-4 h-4" />
@@ -734,7 +773,7 @@ export default function Chat() {
             </div>
             <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
               <span>Enter để gửi, Shift+Enter để xuống dòng</span>
-              <span>Ctrl+B/I/\` để định dạng</span>
+              <span>Ctrl+B/I/` để định dạng</span>
             </div>
           </div>
         </div>
