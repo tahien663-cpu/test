@@ -393,6 +393,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 });
 
 // Image generation endpoint
+// Thay thế endpoint /api/generate-image trong server.js
 app.post('/api/generate-image', authenticateToken, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -452,7 +453,13 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
 
     const imageUrl = await response.text();
     console.info(`Image URL received: ${imageUrl}`);
-    const messageContent = `![Generated Image](${imageUrl})`;
+    // Làm sạch imageUrl để loại bỏ ký tự \ không hợp lệ
+    const cleanImageUrl = imageUrl.replace(/\\/g, '');
+    if (!cleanImageUrl.match(/^https?:\/\/[^\s$.?#].[^\s]*$/)) {
+      console.error(`Invalid image URL: ${cleanImageUrl}`);
+      return res.status(500).json({ error: 'Invalid image URL received', code: 'INVALID_IMAGE_URL' });
+    }
+    const messageContent = `![Generated Image](${cleanImageUrl})`;
 
     console.log(`Saving message to Supabase: chatId=${newChatId}, content=${messageContent}`);
     const { data: savedMessage, error: messageError } = await supabase
