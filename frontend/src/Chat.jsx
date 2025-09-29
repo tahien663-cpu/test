@@ -229,7 +229,7 @@ export default function Chat() {
       const date = new Date(chat.timestamp).toDateString();
       if (!groups[date]) groups[date] = [];
       groups[date].push(chat);
-    };
+    });
     return groups;
   }, [chatHistory]);
 
@@ -784,5 +784,5 @@ export default function Chat() {
       console.error('Markdown parse error:', err);
       return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
-  }
+  };
 };
