@@ -452,12 +452,14 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
     }
 
     const imageUrl = await response.text();
-    console.info(`Image URL received: ${imageUrl}`);
-    // Làm sạch imageUrl để loại bỏ ký tự \ không hợp lệ
-    const cleanImageUrl = imageUrl.replace(/\\/g, '');
-    if (!cleanImageUrl.match(/^https?:\/\/[^\s$.?#].[^\s]*$/)) {
-      console.error(`Invalid image URL: ${cleanImageUrl}`);
-      return res.status(500).json({ error: 'Invalid image URL received', code: 'INVALID_IMAGE_URL' });
+    console.info(`Raw image URL received: ${imageUrl}`);
+    // Làm sạch imageUrl để loại bỏ ký tự \ và các ký tự không mong muốn
+    const cleanImageUrl = imageUrl.replace(/\\/g, '').trim();
+    console.info(`Cleaned image URL: ${cleanImageUrl}`);
+    // Kiểm tra URL đơn giản hơn
+    if (!cleanImageUrl || !cleanImageUrl.startsWith('http')) {
+      console.error(`Invalid image URL after cleaning: ${cleanImageUrl}`);
+      return res.status(500).json({ error: 'Invalid image URL received', code: 'INVALID_IMAGE_URL', details: process.env.NODE_ENV === 'development' ? `Invalid URL: ${cleanImageUrl}` : undefined });
     }
     const messageContent = `![Generated Image](${cleanImageUrl})`;
 
