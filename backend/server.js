@@ -33,13 +33,7 @@ const logger = winston.createLogger({
 });
 
 // Validate environment variables
-const requiredEnvVars = [
-  'SUPABASE_URL',
-  'SUPABASE_SERVICE_ROLE_KEY',
-  'OPENROUTER_API_KEY',
-  'JWT_SECRET'
-];
-
+const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
     logger.error(`Missing required environment variable: ${envVar}`);
@@ -48,13 +42,11 @@ for (const envVar of requiredEnvVars) {
 }
 
 const app = express();
-
-// Initialize Supabase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// Security middleware - Helmet
+// Security middleware
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -62,19 +54,18 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://duckduckgo.com"],
+      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
       frameSrc: ["'none'"],
     }
-  },
-  crossOriginEmbedderPolicy: false,
+  }
 }));
 
 // Rate limiting
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 100,
   message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
   standardHeaders: true,
@@ -90,21 +81,8 @@ const authLimiter = rateLimit({
 
 const chatLimiter = new RateLimiterMemory({
   points: 20,
-  duration: 60, // 1 minute
+  duration: 60,
 });
-
-// CSRF protection
-const csrfProtection = (req, res, next) => {
-  const csrfToken = req.headers['x-csrf-token'];
-  const authToken = req.headers['authorization']?.split(' ')[1];
-  if (['POST', 'PUT', 'DELETE'].includes(req.method)) {
-    if (!csrfToken || !authToken || !jwt.verify(authToken, jwtSecret).csrf === csrfToken) {
-      logger.warn(`CSRF validation failed for ${req.method} ${req.originalUrl}`);
-      return res.status(403).json({ error: 'Invalid CSRF token', code: 'CSRF_INVALID' });
-    }
-  }
-  next();
-};
 
 // CORS configuration
 const allowedOrigins = [
@@ -128,24 +106,13 @@ app.use(cors({
       callback(new Error('Not allowed by CORS'));
     }
   },
-  methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token'],
-  credentials: true,
-  optionsSuccessStatus: 200
+  methods: ['GET', 'POST', 'DELETE', 'PUT', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 }));
 
-app.options('*', cors());
-
-// Body parsing with limits
-app.use(express.json({ 
-  limit: '10mb',
-  verify: (req, res, buf) => {
-    req.rawBody = buf;
-  }
-}));
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// Apply general rate limiter
 app.use(generalLimiter);
 
 // Sanitize input utility
@@ -160,20 +127,19 @@ function sanitizeInput(input) {
       h1: [], h2: [], h3: [], h4: [], h5: [], h6: []
     },
     stripIgnoreTag: true,
-    stripIgnoreTagBody: ['script', 'iframe']
+    stripIgnoreTagBody: ['script']
   });
 }
 
 // Validate UUID
 function validateId(id) {
-  return validate(id) && id.match(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/);
+  return validate(id);
 }
 
 // JWT authentication middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-
   if (!token) {
     logger.warn(`No token provided for ${req.method} ${req.originalUrl}`);
     return res.status(401).json({ error: 'No token provided', code: 'NO_TOKEN' });
@@ -189,19 +155,12 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// Generate CSRF token with JWT
-function generateCsrfToken(userId) {
-  return jwt.sign({ userId, csrf: uuidv4() }, jwtSecret, { expiresIn: '1h' });
-}
-
 // Health check endpoint
 app.get('/health', async (req, res) => {
   try {
-    // Check Supabase connection
     const { error: supabaseError } = await supabase.from('users').select('id').limit(1);
     if (supabaseError) throw new Error('Supabase connection failed');
 
-    // Check OpenRouter
     const openRouterResponse = await fetch('https://openrouter.ai/api/v1/models', {
       headers: { Authorization: `Bearer ${openRouterKey}` }
     });
@@ -214,10 +173,7 @@ app.get('/health', async (req, res) => {
       version: '1.0.1',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
-      dependencies: {
-        supabase: 'connected',
-        openRouter: 'connected'
-      }
+      dependencies: { supabase: 'connected', openRouter: 'connected' }
     });
   } catch (error) {
     logger.error(`Health check failed: ${error.message}`);
@@ -263,12 +219,9 @@ app.post('/api/register', authLimiter, async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
-    const csrfToken = generateCsrfToken(user.id);
-
     logger.info(`User registered: ${sanitizedEmail}`);
     res.status(201).json({
       token,
-      csrfToken,
       user: { id: user.id, email: user.email, name: user.name }
     });
   } catch (err) {
@@ -306,12 +259,9 @@ app.post('/api/login', authLimiter, async (req, res) => {
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
-    const csrfToken = generateCsrfToken(user.id);
-
     logger.info(`User logged in: ${sanitizedEmail}`);
     res.json({
       token,
-      csrfToken,
       user: { id: user.id, email: user.email, name: user.name }
     });
   } catch (err) {
@@ -325,7 +275,7 @@ app.post('/api/login', authLimiter, async (req, res) => {
 });
 
 // Chat endpoint
-app.post('/api/chat', authenticateToken, csrfProtection, async (req, res) => {
+app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     await chatLimiter.consume(req.ip);
     const { messages, chatId } = req.body;
@@ -336,12 +286,10 @@ app.post('/api/chat', authenticateToken, csrfProtection, async (req, res) => {
     const userId = req.user.id;
     let newChatId = chatId;
 
-    // Validate chatId if provided
     if (chatId && !validateId(chatId)) {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Create new chat if no chatId
     if (!chatId) {
       const firstMessage = sanitizeInput(messages[0]?.content || 'New chat');
       const { data: chat, error: chatError } = await supabase
@@ -356,7 +304,6 @@ app.post('/api/chat', authenticateToken, csrfProtection, async (req, res) => {
       }
       newChatId = chat.id;
     } else {
-      // Verify chat ownership
       const { data: chat, error: chatError } = await supabase
         .from('chats')
         .select('id')
@@ -369,7 +316,6 @@ app.post('/api/chat', authenticateToken, csrfProtection, async (req, res) => {
       }
     }
 
-    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -410,7 +356,7 @@ app.post('/api/chat', authenticateToken, csrfProtection, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
-    // Update chat title and last_message
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     const { error: updateError } = await supabase
       .from('chats')
       .update({
@@ -441,7 +387,7 @@ app.post('/api/chat', authenticateToken, csrfProtection, async (req, res) => {
 });
 
 // Image generation endpoint
-app.post('/api/generate-image', authenticateToken, csrfProtection, async (req, res) => {
+app.post('/api/generate-image', authenticateToken, async (req, res) => {
   try {
     await chatLimiter.consume(req.ip);
     const { prompt, chatId } = req.body;
@@ -453,12 +399,10 @@ app.post('/api/generate-image', authenticateToken, csrfProtection, async (req, r
     const userId = req.user.id;
     let newChatId = chatId;
 
-    // Validate chatId if provided
     if (chatId && !validateId(chatId)) {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Create new chat if no chatId
     if (!chatId) {
       const { data: chat, error: chatError } = await supabase
         .from('chats')
@@ -472,7 +416,6 @@ app.post('/api/generate-image', authenticateToken, csrfProtection, async (req, r
       }
       newChatId = chat.id;
     } else {
-      // Verify chat ownership
       const { data: chat, error: chatError } = await supabase
         .from('chats')
         .select('id')
@@ -513,7 +456,6 @@ app.post('/api/generate-image', authenticateToken, csrfProtection, async (req, r
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
-    // Update chat
     const { error: updateError } = await supabase
       .from('chats')
       .update({
@@ -575,7 +517,6 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
         logger.warn(`Get messages error for chat ${chat.id}: ${messageError.message}`);
         return { ...chat, messages: [] };
       }
-
       return { ...chat, messages };
     }));
 
@@ -592,7 +533,7 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
 });
 
 // Delete chat endpoint
-app.delete('/api/chat/:chatId', authenticateToken, csrfProtection, async (req, res) => {
+app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
   try {
     const { chatId } = req.params;
     const userId = req.user.id;
@@ -601,7 +542,6 @@ app.delete('/api/chat/:chatId', authenticateToken, csrfProtection, async (req, r
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Start transaction
     const { error: transactionError } = await supabase.rpc('delete_chat_with_messages', {
       p_chat_id: chatId,
       p_user_id: userId
@@ -611,8 +551,7 @@ app.delete('/api/chat/:chatId', authenticateToken, csrfProtection, async (req, r
       logger.error(`Delete chat error: ${transactionError.message}`);
       return res.status(500).json({
         error: 'Failed to delete chat',
-        code: 'DATABASE_ERROR',
-        details: process.env.NODE_ENV === 'development' ? transactionError.message : undefined
+        code: 'DATABASE_ERROR'
       });
     }
 
@@ -629,7 +568,7 @@ app.delete('/api/chat/:chatId', authenticateToken, csrfProtection, async (req, r
 });
 
 // Delete message endpoint
-app.delete('/api/message/:messageId', authenticateToken, csrfProtection, async (req, res) => {
+app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
     const userId = req.user.id;
@@ -671,7 +610,6 @@ app.delete('/api/message/:messageId', authenticateToken, csrfProtection, async (
       return res.status(500).json({ error: 'Failed to delete message', code: 'DATABASE_ERROR' });
     }
 
-    // Update last_message
     const { data: lastMessage, error: lastMessageError } = await supabase
       .from('messages')
       .select('content')
@@ -708,18 +646,7 @@ app.use('*', (req, res) => {
   res.status(404).json({
     error: 'Endpoint not found',
     code: 'ENDPOINT_NOT_FOUND',
-    path: req.originalUrl,
-    method: req.method,
-    availableEndpoints: [
-      'GET /health',
-      'POST /api/register',
-      'POST /api/login',
-      'GET /api/chat/history',
-      'POST /api/chat',
-      'POST /api/generate-image',
-      'DELETE /api/chat/:chatId',
-      'DELETE /api/message/:messageId'
-    ]
+    path: req.originalUrl
   });
 });
 
@@ -734,48 +661,11 @@ app.use((err, req, res, next) => {
 });
 
 // Graceful shutdown
+const server = app.listen(process.env.PORT || 3001, () => {
+  logger.info(`Server started on port ${process.env.PORT || 3001}`);
+});
+
 process.on('SIGTERM', () => {
-  logger.info('SIGTERM received, shutting down gracefully');
-  server.close(() => {
-    process.exit(0);
-  });
+  logger.info('SIGTERM received, shutting down');
+  server.close(() => process.exit(0));
 });
-
-process.on('SIGINT', () => {
-  logger.info('SIGINT received, shutting down gracefully');
-  server.close(() => {
-    process.exit(0);
-  });
-});
-
-// Unhandled promise rejection
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled Rejection:', { promise, reason });
-  if (process.env.NODE_ENV === 'development') {
-    process.exit(1);
-  }
-});
-
-// Uncaught exception
-process.on('uncaughtException', (error) => {
-  logger.error('Uncaught Exception:', { error });
-  process.exit(1);
-});
-
-// Start server
-const PORT = process.env.PORT || 3001;
-const HOST = process.env.NODE_ENV === 'production' ? '0.0.0.0' : 'localhost';
-
-const server = app.listen(PORT, HOST, () => {
-  logger.info('Server started', {
-    host: HOST,
-    port: PORT,
-    environment: process.env.NODE_ENV || 'development',
-    nodeVersion: process.version,
-    memoryUsage: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB'
-  });
-});
-
-server.timeout = 120000;
-server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
