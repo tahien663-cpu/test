@@ -750,39 +750,4 @@ export default function Chat() {
       </div>
     </div>
   );
-
-  function parseMarkdown(text) {
-    if (!text || typeof text !== 'string') return '';
-    
-    try {
-      let html = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
-          const langClass = lang ? ` language-${lang}` : '';
-          return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
-        })
-        .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
-        .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
-        .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
-        .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
-        .replace(/\n/g, '<br>')
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
-        .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
-          const tag = `h${level.length}`;
-          return `<${tag} class="font-bold mt-4 mb-2 text-${6 - level.length + 1}xl">${content}</${tag}>`;
-        })
-        .replace(/^- \s*(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
-        .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
-        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
-
-      return DOMPurify.sanitize(html, { ADD_TAGS: ['iframe'], ADD_ATTR: ['target', 'allowfullscreen'] });
-    } catch (err) {
-      console.error('Markdown parse error:', err);
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-  };
-};
+}
