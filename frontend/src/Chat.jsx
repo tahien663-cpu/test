@@ -35,7 +35,7 @@ const ImageMessage = ({ src, alt, onLoad, onError }) => {
         }}
         style={{ display: isLoading || hasError ? 'none' : 'block' }}
       />
-      {hasError && <p className="text-red-500 text-sm">Lỗi tải ảnh. Vui lòng thử lại. 😔</p>}
+      {hasError && <p className="text-red-500 text-sm">Lỗi tải ảnh. 😔</p>}
     </div>
   );
 };
@@ -111,11 +111,12 @@ export default function Chat() {
   }, []);
 
   // Retry API call with exponential backoff
-  const retryFetch = useCallback(async (fn, maxRetries = 3, initialDelay = 1000) => {
+  const retryFetch = useCallback(async (url, options, maxRetries = 3, initialDelay = 1000) => {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
         abortControllerRef.current = new AbortController();
-        const response = await fn(abortControllerRef.current.signal);
+        options.signal = abortControllerRef.current.signal;
+        const response = await fetch(url, options);
         if (!response.ok) {
           const errorData = await response.json().catch(() => ({}));
           throw new Error(errorData.error || `HTTP ${response.status}`);
@@ -127,7 +128,7 @@ export default function Chat() {
           return null;
         }
         if (attempt === maxRetries) throw err;
-        console.warn(`Retry ${attempt}/${maxRetries}: ${err.message}`);
+        console.warn(`Retry ${attempt}/${maxRetries} for ${url}: ${err.message}`);
         await new Promise(resolve => setTimeout(resolve, initialDelay * Math.pow(2, attempt - 1)));
       }
     }
@@ -172,13 +173,10 @@ export default function Chat() {
   // Load chat history
   const loadChatHistory = useCallback(async () => {
     try {
-      const response = await retryFetch(signal => apiService.request('/chat/history', { signal }));
-      if (response) {
-        const data = await response.json();
-        setChatHistory(data.history || []);
-        if (data.history.length > 0 && !currentChatId) {
-          setCurrentChatId(data.history[0].id);
-        }
+      const data = await apiService.getChatHistory();
+      setChatHistory(data.history || []);
+      if (data.history.length > 0 && !currentChatId) {
+        setCurrentChatId(data.history[0].id);
       }
     } catch (err) {
       console.error('Load history error:', err.message);
@@ -187,7 +185,7 @@ export default function Chat() {
         navigate('/login');
       }
     }
-  }, [navigate, retryFetch]);
+  }, [navigate]);
 
   useEffect(() => {
     loadChatHistory();
@@ -335,32 +333,28 @@ export default function Chat() {
     setShowActionDropdown(false);
 
     try {
-      const response = await retryFetch(signal => apiService.request('/chat', {
+      const data = await retryFetch(() => apiService.request('/chat', {
         method: 'POST',
-        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId }),
-        signal
+        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId })
       }));
-      if (response) {
-        const data = await response.json();
-        const aiMessage = {
-          id: data.messageId || Date.now().toString(),
-          role: 'ai',
-          content: data.message,
-          timestamp: data.timestamp || new Date().toISOString()
-        };
-        setMessages(prev => [...prev, aiMessage]);
-        if (data.chatId && !currentChatId) {
-          setCurrentChatId(data.chatId);
-        }
-        await loadChatHistory();
+      const aiMessage = {
+        id: data.messageId || Date.now().toString(),
+        role: 'ai',
+        content: data.message,
+        timestamp: data.timestamp || new Date().toISOString()
+      };
+      setMessages(prev => [...prev, aiMessage]);
+      if (data.chatId && !currentChatId) {
+        setCurrentChatId(data.chatId);
       }
+      await loadChatHistory();
     } catch (err) {
       if (err.name !== 'AbortError') {
         console.error('Send message error:', err.message);
         setMessages(prev => [...prev, {
           id: Date.now().toString(),
           role: 'ai',
-          content: '**Ôi zời, lỗi rồi!** Thử lại sau nhé? 😅',
+          content: '**Ôi zời, lỗi rồi!** . Thử lại sau nhé? 😅',
           timestamp: new Date().toISOString()
         }]);
         if (err.message.includes('401') || err.message.includes('403')) {
@@ -399,41 +393,27 @@ export default function Chat() {
     setIsLoading(true);
 
     try {
-      const response = await retryFetch(signal => apiService.request('/generate-image', {
+      const data = await retryFetch(() => apiService.request('/generate-image', {
         method: 'POST',
-        body: JSON.stringify({ prompt: input, chatId: currentChatId }),
-        signal
+        body: JSON.stringify({ prompt: input, chatId: currentChatId })
       }));
-      if (response) {
-        const data = await response.json();
-        console.log('Generate image response:', data); // Debug log
-        if (!data.imageUrl) {
-          throw new Error('No image URL returned from API');
-        }
-        // Validate image URL
-        const imageResponse = await fetch(data.imageUrl, { method: 'HEAD' });
-        if (!imageResponse.ok) {
-          throw new Error(`Image URL invalid: ${data.imageUrl}`);
-        }
-        const aiMessage = {
-          id: data.messageId || Date.now().toString(),
-          role: 'ai',
-          content: data.message || 'Ảnh đã được tạo!',
-          imageUrl: data.imageUrl,
-          timestamp: data.timestamp || new Date().toISOString()
-        };
-        setMessages(prev => [...prev, aiMessage]);
-        if (data.chatId && !currentChatId) {
-          setCurrentChatId(data.chatId);
-        }
-        await loadChatHistory();
+      const aiMessage = {
+        id: data.messageId || Date.now().toString(),
+        role: 'ai',
+        content: data.message,
+        timestamp: data.timestamp || new Date().toISOString()
+      };
+      setMessages(prev => [...prev, aiMessage]);
+      if (data.chatId && !currentChatId) {
+        setCurrentChatId(data.chatId);
       }
+      await loadChatHistory();
     } catch (err) {
       console.error('Generate image error:', err.message);
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'ai',
-        content: `**Ôi zời, lỗi tạo ảnh rồi!** ${err.message}. Thử lại sau nhé? 😅`,
+        content: '**Ôi zời, lỗi tạo ảnh rồi!** Thử lại sau nhé? 😅',
         timestamp: new Date().toISOString()
       }]);
       if (err.message.includes('401') || err.message.includes('403')) {
@@ -450,7 +430,7 @@ export default function Chat() {
     if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
 
     try {
-      await retryFetch(signal => apiService.request(`/chat/${id}`, { method: 'DELETE', signal }));
+      await apiService.request(`/chat/${id}`, { method: 'DELETE' });
       setChatHistory(prev => prev.filter(chat => chat.id !== id));
       if (currentChatId === id) {
         setCurrentChatId(null);
@@ -459,18 +439,18 @@ export default function Chat() {
     } catch (err) {
       console.error('Delete chat error:', err.message);
     }
-  }, [currentChatId, messages, retryFetch]);
+  }, [currentChatId, messages]);
 
   // Delete message
   const deleteMessage = useCallback(async (messageId) => {
     try {
-      await retryFetch(signal => apiService.request(`/message/${messageId}`, { method: 'DELETE', signal }));
+      await apiService.request(`/message/${messageId}`, { method: 'DELETE' });
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
       await loadChatHistory();
     } catch (err) {
       console.error('Delete message error:', err.message);
     }
-  }, [loadChatHistory, retryFetch]);
+  }, [loadChatHistory]);
 
   // New chat
   const newChat = useCallback(() => {
@@ -629,19 +609,10 @@ export default function Chat() {
                   )}
                   <span className="font-medium">{msg.role === 'user' ? userName : 'Hein AI'}</span>
                 </div>
-                {msg.imageUrl ? (
-                  <ImageMessage
-                    src={msg.imageUrl}
-                    alt="Generated Image"
-                    onLoad={() => console.log('Image loaded:', msg.imageUrl)}
-                    onError={() => console.error('Image failed to load:', msg.imageUrl)}
-                  />
-                ) : (
-                  <div 
-                    className="prose prose-sm dark:prose-invert max-w-none"
-                    dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
-                  />
-                )}
+                <div 
+                  className="prose prose-sm dark:prose-invert max-w-none"
+                  dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
+                />
                 <div className="flex justify-between items-center mt-2 text-xs opacity-70">
                   <span>{formatTimestamp(msg.timestamp)}</span>
                   {msg.role === 'user' && msg.id !== 'welcome' && (
