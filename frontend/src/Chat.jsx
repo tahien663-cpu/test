@@ -3,8 +3,9 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, 
-  Globe, Image, ChevronDown
+  Globe, Image, ChevronDown, StopCircle // Thêm StopCircle
 } from 'lucide-react';
+import { StopCircle as MuiStopCircle } from '@mui/icons-material'; // Thêm import từ @mui/icons-material
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
 
@@ -722,13 +723,13 @@ export default function Chat() {
               )}
               <div className="absolute right-3 top-3 flex gap-2" ref={dropdownRef}>
                 {isLoading && (
-                  <button
-                    onClick={stopGeneration}
-                    className={`p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all duration-200`}
-                    title="Stop"
-                  >
-                    <StopCircle className="w-5 h-5" />
-                  </button>
+<button
+  onClick={stopGeneration}
+  className={`p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all duration-200`}
+  title="Stop"
+>
+  <MuiStopCircle className="w-5 h-5" /> {/* Sử dụng MuiStopCircle */}
+</button>
                 )}
                 {!isLoading && input.trim() && (
                   <div className="relative">
