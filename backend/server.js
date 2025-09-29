@@ -394,12 +394,13 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
 // Image generation endpoint
 // Thay thế endpoint /api/generate-image trong server.js
+// Thay thế endpoint /api/generate-image trong server.js
 app.post('/api/generate-image', authenticateToken, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
     console.info(`Generate image request: userId=${req.user.id}, chatId=${chatId}, prompt=${prompt}`);
-    if (!prompt) {
-      return res.status(400).json({ error: 'Missing prompt', code: 'INVALID_INPUT' });
+    if (!prompt || typeof prompt !== 'string') {
+      return res.status(400).json({ error: 'Invalid or missing prompt', code: 'INVALID_INPUT' });
     }
 
     const sanitizedPrompt = sanitizeInput(prompt);
@@ -453,14 +454,20 @@ app.post('/api/generate-image', authenticateToken, async (req, res) => {
 
     const imageUrl = await response.text();
     console.info(`Raw image URL received: ${imageUrl}`);
-    // Làm sạch imageUrl để loại bỏ ký tự \ và các ký tự không mong muốn
-    const cleanImageUrl = imageUrl.replace(/\\/g, '').trim();
+    // Làm sạch imageUrl
+    const cleanImageUrl = imageUrl ? imageUrl.replace(/\\/g, '').trim() : '';
     console.info(`Cleaned image URL: ${cleanImageUrl}`);
-    // Kiểm tra URL đơn giản hơn
+
+    // Kiểm tra URL hợp lệ
     if (!cleanImageUrl || !cleanImageUrl.startsWith('http')) {
       console.error(`Invalid image URL after cleaning: ${cleanImageUrl}`);
-      return res.status(500).json({ error: 'Invalid image URL received', code: 'INVALID_IMAGE_URL', details: process.env.NODE_ENV === 'development' ? `Invalid URL: ${cleanImageUrl}` : undefined });
+      return res.status(500).json({
+        error: 'Invalid image URL received',
+        code: 'INVALID_IMAGE_URL',
+        details: process.env.NODE_ENV === 'development' ? `Raw URL: ${imageUrl}, Cleaned URL: ${cleanImageUrl}` : undefined
+      });
     }
+
     const messageContent = `![Generated Image](${cleanImageUrl})`;
 
     console.log(`Saving message to Supabase: chatId=${newChatId}, content=${messageContent}`);
