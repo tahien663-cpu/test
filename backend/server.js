@@ -319,6 +319,12 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       newChatId = chat.id;
     }
 
+    // Map 'ai' role to 'assistant' for OpenRouter
+    const mappedMessages = messages.map(m => ({
+      role: m.role === 'ai' ? 'assistant' : m.role,
+      content: sanitizeInput(m.content)
+    }));
+
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -327,10 +333,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       },
       body: JSON.stringify({
         model: 'x-ai/grok-4-fast:free',
-        messages: messages.map(m => ({
-          role: m.role,
-          content: sanitizeInput(m.content)
-        }))
+        messages: mappedMessages
       })
     });
 
