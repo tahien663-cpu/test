@@ -354,7 +354,7 @@ export default function Chat() {
         setMessages(prev => [...prev, {
           id: Date.now().toString(),
           role: 'ai',
-          content: '**Ôi zời, lỗi rồi!** . Thử lại sau nhé? 😅',
+          content: '**Ôi zời, lỗi rồi!** Thử lại sau nhé? 😅',
           timestamp: new Date().toISOString()
         }]);
         if (err.message.includes('401') || err.message.includes('403')) {
@@ -734,7 +734,7 @@ export default function Chat() {
             </div>
             <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
               <span>Enter để gửi, Shift+Enter để xuống dòng</span>
-              <span>Ctrl+B/I/` để định dạng</span>
+              <span>Ctrl+B/I/\` để định dạng</span>
             </div>
           </div>
         </div>
