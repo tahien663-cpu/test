@@ -3,42 +3,144 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, 
-  Globe, Image, ChevronDown, StopCircle // Thêm StopCircle
+  Globe, Image, ChevronDown, StopCircle
 } from 'lucide-react';
-import { StopCircle as MuiStopCircle } from '@mui/icons-material'; // Thêm import từ @mui/icons-material
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
 
-const ImageMessage = ({ src, alt, onLoad, onError }) => {
+// Image Message Component
+const ImageMessage = ({ src, alt }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
 
   return (
-    <div className="relative">
+    <div className="relative my-2">
       {isLoading && (
-        <div className="absolute inset-0 flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-lg">
-          <Loader2 className="w-6 h-6 animate-spin text-gray-500" />
+        <div className="flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-lg p-8">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
         </div>
       )}
-      <img
-        src={src}
-        alt={alt}
-        className="max-w-full rounded-lg shadow-lg"
-        onLoad={() => {
-          setIsLoading(false);
-          onLoad?.();
-        }}
-        onError={() => {
-          setIsLoading(false);
-          setHasError(true);
-          onError?.();
-        }}
-        style={{ display: isLoading || hasError ? 'none' : 'block' }}
-      />
-      {hasError && <p className="text-red-500 text-sm">Lỗi tải ảnh. 😔</p>}
+      {!hasError ? (
+        <img
+          src={src}
+          alt={alt || 'Generated Image'}
+          className="max-w-full h-auto rounded-lg shadow-lg"
+          onLoad={() => setIsLoading(false)}
+          onError={() => {
+            setIsLoading(false);
+            setHasError(true);
+          }}
+          style={{ display: isLoading ? 'none' : 'block' }}
+        />
+      ) : (
+        <div className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 p-4 rounded-lg">
+          <p className="font-medium">Không thể tải ảnh</p>
+          <p className="text-sm mt-1">URL: {src}</p>
+        </div>
+      )}
     </div>
   );
 };
+
+// Message Content Component
+const MessageContent = ({ content, role }) => {
+  // Check if content contains image markdown
+  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  const hasImage = imageRegex.test(content);
+
+  if (hasImage) {
+    const parts = [];
+    let lastIndex = 0;
+    const regex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+    let match;
+
+    while ((match = regex.exec(content)) !== null) {
+      // Add text before image
+      if (match.index > lastIndex) {
+        const textBefore = content.substring(lastIndex, match.index);
+        if (textBefore.trim()) {
+          parts.push({ type: 'text', content: textBefore });
+        }
+      }
+
+      // Add image
+      parts.push({ type: 'image', alt: match[1], src: match[2] });
+      lastIndex = regex.lastIndex;
+    }
+
+    // Add remaining text
+    if (lastIndex < content.length) {
+      const textAfter = content.substring(lastIndex);
+      if (textAfter.trim()) {
+        parts.push({ type: 'text', content: textAfter });
+      }
+    }
+
+    return (
+      <div>
+        {parts.map((part, index) => {
+          if (part.type === 'image') {
+            return <ImageMessage key={index} src={part.src} alt={part.alt} />;
+          }
+          return (
+            <div 
+              key={index}
+              className="prose prose-sm dark:prose-invert max-w-none"
+              dangerouslySetInnerHTML={{ __html: parseMarkdown(part.content) }}
+            />
+          );
+        })}
+      </div>
+    );
+  }
+
+  // Regular text content
+  return (
+    <div 
+      className="prose prose-sm dark:prose-invert max-w-none"
+      dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }}
+    />
+  );
+};
+
+// Enhanced markdown parser
+function parseMarkdown(text) {
+  if (!text || typeof text !== 'string') return '';
+  
+  try {
+    let html = text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
+        const langClass = lang ? ` language-${lang}` : '';
+        return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
+      })
+      .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
+      .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
+      .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
+      .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
+      .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
+      .replace(/\n/g, '<br>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
+      .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
+        const tag = `h${level.length}`;
+        const size = 7 - level.length;
+        return `<${tag} class="font-bold mt-4 mb-2 text-${size}xl">${content}</${tag}>`;
+      })
+      .replace(/^[-*]\s+(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
+      .replace(/^\d+\.\s+(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>');
+
+    return DOMPurify.sanitize(html, { 
+      ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button'],
+      ALLOWED_ATTR: ['href', 'target', 'rel', 'class']
+    });
+  } catch (err) {
+    console.error('Markdown parse error:', err);
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+}
 
 export default function Chat() {
   const navigate = useNavigate();
@@ -65,13 +167,13 @@ export default function Chat() {
   const abortControllerRef = useRef(null);
   const dropdownRef = useRef(null);
   const messagesContainerRef = useRef(null);
+  const isLoadingHistoryRef = useRef(false);
 
-  // Cleanup on component unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
-        abortControllerRef.current = null;
       }
     };
   }, []);
@@ -103,10 +205,7 @@ export default function Chat() {
                 e.target.disabled = false;
               }, 2000);
             })
-            .catch(err => {
-              console.error('Copy error:', err);
-              setError('Failed to copy code. Please try again.');
-            });
+            .catch(err => console.error('Copy error:', err));
         }
       }
     };
@@ -114,72 +213,28 @@ export default function Chat() {
     const container = messagesContainerRef.current;
     if (container) {
       container.addEventListener('click', handleCopy);
+      return () => container.removeEventListener('click', handleCopy);
     }
-    return () => {
-      if (container) {
-        container.removeEventListener('click', handleCopy);
-      }
-    };
-  }, []);
+  }, [messages]);
 
-  // Enhanced markdown parser with safer sanitization
-  const parseMarkdown = useCallback((text) => {
-    if (!text || typeof text !== 'string') return '';
+  // Load chat history
+  const loadChatHistory = useCallback(async () => {
+    if (isLoadingHistoryRef.current) return;
     
     try {
-      let html = text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
-          const langClass = lang ? ` language-${lang}` : '';
-          return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
-        })
-        .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
-        .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
-        .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
-        .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
-        .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
-        .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
-        .replace(/\n/g, '<br>')
-        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
-        .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
-          const tag = `h${level.length}`;
-          return `<${tag} class="font-bold mt-4 mb-2 text-${6 - level.length + 1}xl">${content}</${tag}>`;
-        })
-        .replace(/^- \s*(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
-        .replace(/^\d+\. \s*(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>')
-        .replace(/!\[([^\]]+)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full rounded-lg my-2 shadow-lg">');
-
-      return DOMPurify.sanitize(html, { 
-        ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'img', 'br', 'p'],
-        ALLOWED_ATTR: ['href', 'target', 'rel', 'src', 'alt', 'class']
-      });
-    } catch (err) {
-      console.error('Markdown parse error:', err);
-      return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    }
-  }, []);
-
-  // Load chat history with debouncing
-  const loadChatHistory = useCallback(async () => {
-    try {
+      isLoadingHistoryRef.current = true;
       const data = await apiService.getChatHistory();
       setChatHistory(data.history || []);
-      if (data.history.length > 0 && !currentChatId) {
-        setCurrentChatId(data.history[0].id);
-      }
     } catch (err) {
-      console.error('Load history error:', err.message);
-      setError('Failed to load chat history. Please try again.');
+      console.error('Load history error:', err);
       if (err.message.includes('401') || err.message.includes('403')) {
-        localStorage.removeItem('token');
-        localStorage.removeItem('userName');
-        localStorage.removeItem('userEmail');
+        localStorage.clear();
         navigate('/login');
       }
+    } finally {
+      isLoadingHistoryRef.current = false;
     }
-  }, [navigate, currentChatId]);
+  }, [navigate]);
 
   useEffect(() => {
     loadChatHistory();
@@ -188,21 +243,15 @@ export default function Chat() {
   // Load specific chat
   const loadChat = useCallback((id) => {
     const selectedChat = chatHistory.find(chat => chat.id === id);
-    if (selectedChat) {
-      setMessages(selectedChat.messages || [messages[0]]);
+    if (selectedChat && selectedChat.messages) {
+      setMessages(selectedChat.messages.length > 0 ? selectedChat.messages : [messages[0]]);
       setCurrentChatId(id);
     }
   }, [chatHistory]);
 
-  // Fix race condition in chat loading
-  useEffect(() => {
-    if (currentChatId && chatHistory.length > 0) {
-      loadChat(currentChatId);
-    }
-  }, [currentChatId, chatHistory, loadChat]);
-
   // Format timestamp
   const formatTimestamp = useCallback((timestamp) => {
+    if (!timestamp) return '';
     const date = new Date(timestamp);
     const today = new Date();
     const yesterday = new Date(today);
@@ -220,7 +269,7 @@ export default function Chat() {
   const groupedHistory = useMemo(() => {
     const groups = {};
     chatHistory.forEach(chat => {
-      const date = new Date(chat.timestamp).toDateString();
+      const date = new Date(chat.created_at || chat.timestamp).toDateString();
       if (!groups[date]) groups[date] = [];
       groups[date].push(chat);
     });
@@ -235,8 +284,7 @@ export default function Chat() {
     const start = textarea.selectionStart;
     const end = textarea.selectionEnd;
     const selectedText = input.substring(start, end);
-    let newText;
-    let newCursorPos;
+    let newText, newCursorPos;
 
     switch (formatType) {
       case 'bold':
@@ -258,31 +306,25 @@ export default function Chat() {
     setInput(input.substring(0, start) + newText + input.substring(end));
     setTimeout(() => {
       textarea.focus();
-      textarea.selectionStart = textarea.selectionEnd = newCursorPos;
+      textarea.setSelectionRange(newCursorPos, newCursorPos);
     }, 0);
   }, [input]);
 
-  const insertBold = () => insertFormatting('bold');
-  const insertItalic = () => insertFormatting('italic');
-  const insertCode = () => insertFormatting('code');
-
-  // Handle keydown for formatting shortcuts
+  // Handle keydown
   const handleKeyDown = useCallback((e) => {
     if (e.ctrlKey || e.metaKey) {
       switch (e.key.toLowerCase()) {
         case 'b':
           e.preventDefault();
-          insertBold();
+          insertFormatting('bold');
           break;
         case 'i':
           e.preventDefault();
-          insertItalic();
+          insertFormatting('italic');
           break;
         case '`':
           e.preventDefault();
-          insertCode();
-          break;
-        default:
+          insertFormatting('code');
           break;
       }
     }
@@ -290,7 +332,7 @@ export default function Chat() {
       e.preventDefault();
       handleSendMessage();
     }
-  }, [isLoading]);
+  }, [isLoading, insertFormatting]);
 
   // Stop generation
   const stopGeneration = useCallback(() => {
@@ -304,21 +346,16 @@ export default function Chat() {
   // Handle send message
   const handleSendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
+    
     if (input.length > 500) {
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        role: 'ai',
-        content: 'Prompt quá dài! Vui lòng sử dụng tối đa 500 ký tự.',
-        timestamp: new Date().toISOString()
-      }]);
-      setError('Message too long. Maximum 500 characters.');
+      setError('Tin nhắn quá dài (tối đa 500 ký tự)');
       return;
     }
 
     const userMessage = {
-      id: Date.now().toString(),
+      id: `user-${Date.now()}`,
       role: 'user',
-      content: input,
+      content: input.trim(),
       timestamp: new Date().toISOString()
     };
 
@@ -332,37 +369,47 @@ export default function Chat() {
       abortControllerRef.current = new AbortController();
       const data = await apiService.request('/chat', {
         method: 'POST',
-        body: JSON.stringify({ messages: [...messages, userMessage], chatId: currentChatId }),
+        body: JSON.stringify({ 
+          messages: [...messages, userMessage].map(m => ({
+            role: m.role,
+            content: m.content
+          })), 
+          chatId: currentChatId 
+        }),
         signal: abortControllerRef.current.signal
       });
+
       const aiMessage = {
-        id: data.messageId || Date.now().toString(),
+        id: data.messageId || `ai-${Date.now()}`,
         role: 'ai',
         content: data.message,
         timestamp: data.timestamp || new Date().toISOString()
       };
+
       setMessages(prev => [...prev, aiMessage]);
+      
       if (data.chatId && !currentChatId) {
         setCurrentChatId(data.chatId);
       }
+      
       await loadChatHistory();
     } catch (err) {
       if (err.name !== 'AbortError') {
-        console.error('Send message error:', err.message);
-        const errorMessage = err.message.includes('401') || err.message.includes('403')
-          ? 'Session expired. Please log in again.'
-          : 'Failed to send message. Please try again.';
-        setError(errorMessage);
+        console.error('Send message error:', err);
+        const errorMsg = err.message.includes('401') || err.message.includes('403')
+          ? 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.'
+          : 'Không thể gửi tin nhắn. Vui lòng thử lại.';
+        
+        setError(errorMsg);
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: `error-${Date.now()}`,
           role: 'ai',
-          content: `**Error**: ${errorMessage}`,
+          content: `**Lỗi**: ${errorMsg}`,
           timestamp: new Date().toISOString()
         }]);
+
         if (err.message.includes('401') || err.message.includes('403')) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('userName');
-          localStorage.removeItem('userEmail');
+          localStorage.clear();
           navigate('/login');
         }
       }
@@ -376,24 +423,31 @@ export default function Chat() {
   const handleWebSearch = useCallback(async () => {
     if (!input.trim() || isLoading) return;
     setShowActionDropdown(false);
-    const searchPrompt = `Tìm kiếm web: ${input}`;
-    setInput(searchPrompt);
-    await handleSendMessage();
+    const searchInput = `Tìm kiếm web: ${input}`;
+    setInput(searchInput);
+    setTimeout(() => handleSendMessage(), 100);
   }, [input, isLoading, handleSendMessage]);
 
   // Handle generate image
   const handleGenerateImage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
+    
+    if (input.length > 500) {
+      setError('Prompt quá dài (tối đa 500 ký tự)');
+      return;
+    }
+
     setShowActionDropdown(false);
 
     const userMessage = {
-      id: Date.now().toString(),
+      id: `user-${Date.now()}`,
       role: 'user',
-      content: `Tạo ảnh: ${input}`,
+      content: `Tạo ảnh: ${input.trim()}`,
       timestamp: new Date().toISOString()
     };
 
     setMessages(prev => [...prev, userMessage]);
+    const promptToSend = input.trim();
     setInput('');
     setIsLoading(true);
     setError(null);
@@ -402,38 +456,41 @@ export default function Chat() {
       abortControllerRef.current = new AbortController();
       const data = await apiService.request('/generate-image', {
         method: 'POST',
-        body: JSON.stringify({ prompt: input, chatId: currentChatId }),
-        signal: abortControllerRef.current.signal,
-        timeoutMs: 30000 // Reduced timeout
+        body: JSON.stringify({ prompt: promptToSend, chatId: currentChatId }),
+        signal: abortControllerRef.current.signal
       });
+
       const aiMessage = {
-        id: data.messageId || Date.now().toString(),
+        id: data.messageId || `ai-${Date.now()}`,
         role: 'ai',
-        content: data.message,
+        content: data.message || `![Generated Image](${data.imageUrl})`,
         timestamp: data.timestamp || new Date().toISOString()
       };
+
       setMessages(prev => [...prev, aiMessage]);
+      
       if (data.chatId && !currentChatId) {
         setCurrentChatId(data.chatId);
       }
+      
       await loadChatHistory();
     } catch (err) {
       if (err.name !== 'AbortError') {
-        console.error('Generate image error:', err.message);
-        const errorMessage = err.message.includes('401') || err.message.includes('403')
-          ? 'Session expired. Please log in again.'
-          : 'Failed to generate image. Please try again.';
-        setError(errorMessage);
+        console.error('Generate image error:', err);
+        const errorMsg = err.message.includes('401') || err.message.includes('403')
+          ? 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.'
+          : 'Không thể tạo ảnh. Vui lòng thử lại.';
+        
+        setError(errorMsg);
         setMessages(prev => [...prev, {
-          id: Date.now().toString(),
+          id: `error-${Date.now()}`,
           role: 'ai',
-          content: `**Error**: ${errorMessage}`,
+          content: `**Lỗi**: ${errorMsg}`,
           timestamp: new Date().toISOString()
         }]);
+
         if (err.message.includes('401') || err.message.includes('403')) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('userName');
-          localStorage.removeItem('userEmail');
+          localStorage.clear();
           navigate('/login');
         }
       }
@@ -455,10 +512,10 @@ export default function Chat() {
         setMessages([messages[0]]);
       }
     } catch (err) {
-      console.error('Delete chat error:', err.message);
-      setError('Failed to delete chat. Please try again.');
+      console.error('Delete chat error:', err);
+      setError('Không thể xóa cuộc trò chuyện. Vui lòng thử lại.');
     }
-  }, [currentChatId, messages]);
+  }, [currentChatId]);
 
   // Delete message
   const deleteMessage = useCallback(async (messageId) => {
@@ -467,47 +524,51 @@ export default function Chat() {
       setMessages(prev => prev.filter(msg => msg.id !== messageId));
       await loadChatHistory();
     } catch (err) {
-      console.error('Delete message error:', err.message);
-      setError('Failed to delete message. Please try again.');
+      console.error('Delete message error:', err);
+      setError('Không thể xóa tin nhắn. Vui lòng thử lại.');
     }
   }, [loadChatHistory]);
 
   // New chat
   const newChat = useCallback(() => {
     setCurrentChatId(null);
-    setMessages([messages[0]]);
+    setMessages([{
+      id: 'welcome',
+      role: 'ai',
+      content: 'Xin chào! Tôi là **Hein**! 😄',
+      timestamp: new Date().toISOString()
+    }]);
     setError(null);
-  }, [messages]);
+    setInput('');
+  }, []);
 
   // Toggle theme
   const toggleTheme = useCallback(() => {
     const newTheme = theme === 'light' ? 'dark' : 'light';
     setTheme(newTheme);
     localStorage.setItem('theme', newTheme);
-    document.documentElement.classList.toggle('dark', newTheme === 'dark');
   }, [theme]);
 
-  // Scroll to bottom with user scroll detection
+  // Scroll to bottom
   const scrollToBottom = useCallback(() => {
-    if (messagesEndRef.current) {
-      const container = messagesContainerRef.current;
-      if (container) {
-        const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 100;
-        if (isAtBottom) {
-          messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-        }
-      }
-    }
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages, scrollToBottom]);
+  }, [messages]);
 
   // Theme effect
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
+
+  // Auto-resize textarea
+  const handleInputChange = useCallback((e) => {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 192)}px`;
+  }, []);
 
   return (
     <div className={`min-h-screen flex ${theme === 'light' ? 'bg-gray-50' : 'bg-gray-900'} text-gray-900 dark:text-white transition-colors duration-300`}>
@@ -538,7 +599,7 @@ export default function Chat() {
                 <h3 className="text-sm font-semibold mb-2 text-gray-500 dark:text-gray-400">
                   {new Date(date).toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
                 </h3>
-                {chats.filter(chat => chat.title.toLowerCase().includes(searchTerm.toLowerCase())).map(chat => (
+                {chats.filter(chat => (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())).map(chat => (
                   <div 
                     key={chat.id}
                     className={`p-3 rounded-lg cursor-pointer relative group ${currentChatId === chat.id ? 'bg-blue-100 dark:bg-blue-900/30' : ''} ${theme === 'light' ? 'hover:bg-gray-100' : 'hover:bg-gray-700'} transition-colors`}
@@ -547,7 +608,7 @@ export default function Chat() {
                     <div className="flex justify-between items-start">
                       <div className="min-w-0 flex-1">
                         <p className="font-medium truncate">{chat.title || 'Cuộc trò chuyện mới'}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{chat.last_message}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{chat.last_message || 'Không có tin nhắn'}</p>
                       </div>
                       <button 
                         onClick={(e) => {
@@ -621,8 +682,11 @@ export default function Chat() {
         {/* Messages */}
         <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 pt-20 pb-32">
           {error && (
-            <div className="p-4 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg">
-              {error}
+            <div className="p-4 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg flex items-center justify-between">
+              <span>{error}</span>
+              <button onClick={() => setError(null)} className="ml-4 text-red-500 hover:text-red-700">
+                ✕
+              </button>
             </div>
           )}
           {messages.map((msg) => (
@@ -639,10 +703,7 @@ export default function Chat() {
                   )}
                   <span className="font-medium">{msg.role === 'user' ? userName : 'Hein AI'}</span>
                 </div>
-                <div 
-                  className="prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
-                />
+                <MessageContent content={msg.content} role={msg.role} />
                 <div className="flex justify-between items-center mt-2 text-xs opacity-70">
                   <span>{formatTimestamp(msg.timestamp)}</span>
                   {msg.role === 'user' && msg.id !== 'welcome' && (
@@ -680,40 +741,31 @@ export default function Chat() {
               <textarea
                 ref={inputRef}
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Nhập tin nhắn của bạn..."
                 className={`w-full p-4 pr-32 rounded-xl border-2 resize-none focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500' : 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'} shadow-sm focus:ring-blue-500 min-h-[3rem] max-h-48`}
                 disabled={isLoading}
                 rows={1}
-                style={{ 
-                  height: 'auto',
-                  minHeight: '3rem',
-                  transition: 'height 0.2s ease-in-out'
-                }}
-                onInput={(e) => {
-                  e.target.style.height = 'auto';
-                  e.target.style.height = `${Math.min(e.target.scrollHeight, 192)}px`;
-                }}
               />
               {!isLoading && input.trim() && (
                 <div className="absolute right-24 top-3 flex gap-1">
                   <button
-                    onClick={insertBold}
+                    onClick={() => insertFormatting('bold')}
                     className={`p-1.5 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
                     title="Bold (Ctrl+B)"
                   >
                     <Bold className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={insertItalic}
+                    onClick={() => insertFormatting('italic')}
                     className={`p-1.5 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
                     title="Italic (Ctrl+I)"
                   >
                     <Italic className="w-3.5 h-3.5" />
                   </button>
                   <button
-                    onClick={insertCode}
+                    onClick={() => insertFormatting('code')}
                     className={`p-1.5 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
                     title="Code (Ctrl+`)"
                   >
@@ -723,13 +775,13 @@ export default function Chat() {
               )}
               <div className="absolute right-3 top-3 flex gap-2" ref={dropdownRef}>
                 {isLoading && (
-<button
-  onClick={stopGeneration}
-  className={`p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all duration-200`}
-  title="Stop"
->
-  <MuiStopCircle className="w-5 h-5" /> {/* Sử dụng MuiStopCircle */}
-</button>
+                  <button
+                    onClick={stopGeneration}
+                    className="p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all duration-200"
+                    title="Dừng"
+                  >
+                    <StopCircle className="w-5 h-5" />
+                  </button>
                 )}
                 {!isLoading && input.trim() && (
                   <div className="relative">
@@ -774,11 +826,19 @@ export default function Chat() {
             </div>
             <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
               <span>Enter để gửi, Shift+Enter để xuống dòng</span>
-              <span>Ctrl+B/I/` để định dạng</span>
+              <span className="text-right">Ctrl+B/I/` để định dạng | {input.length}/500</span>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Mobile sidebar overlay */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-20 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
     </div>
   );
 }
