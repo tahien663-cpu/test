@@ -156,7 +156,7 @@ async function enhanceImagePrompt(userPrompt) {
     const enhanceMessages = [
       {
         role: 'system',
-        content: 'You are a prompt enhancement assistant. Translate the user\'s image request to English (if not already) and enhance it with artistic details to create a beautiful image. Keep the enhanced prompt under 60 characters. Focus on: style, lighting, composition, and mood. Return ONLY the enhanced prompt, nothing else.'
+        content: 'You are a prompt enhancement assistant. Translate the user\'s image request to English (if not already) and enhance it with artistic details to create a beautiful image. Keep the enhanced prompt under 45 characters. Focus on: style, lighting, composition, and mood. Return ONLY the enhanced prompt, nothing else.'
       },
       {
         role: 'user',
@@ -191,7 +191,7 @@ async function enhanceImagePrompt(userPrompt) {
     const enhancedPrompt = data.choices?.[0]?.message?.content?.trim() || userPrompt;
     
     // Ensure prompt is not too long
-    const finalPrompt = enhancedPrompt.length > 60 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
+    const finalPrompt = enhancedPrompt.length > 50 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
     
     console.log(`Prompt enhanced successfully: "${finalPrompt}"`);
     return finalPrompt;
