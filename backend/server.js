@@ -67,7 +67,7 @@ const authLimiter = rateLimit({
 
 const imageLimiter = rateLimit({
   windowMs: 60 * 1000,
-  max: 10,
+  max: 15,
   message: { error: 'Too many image generation requests, please try again after 1 minute' },
   standardHeaders: true,
   legacyHeaders: false
@@ -112,7 +112,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.4',
+    version: '1.0.5',
     endpoints: [
       '/health',
       '/api/register',
@@ -125,7 +125,8 @@ app.get('/', (req, res) => {
     ],
     features: [
       'AI-enhanced image prompts',
-      'Smart polling image verification'
+      'Optimized smart polling (2s + 5x0.8s)',
+      'Rate limit: 15 images/min'
     ]
   });
 });
@@ -151,10 +152,13 @@ function validateId(id) {
   return validate(id);
 }
 
-// Enhance image prompt using AI
+// Enhance image prompt using AI with timeout
 async function enhanceImagePrompt(userPrompt) {
   try {
     console.log(`Starting prompt enhancement for: "${userPrompt}"`);
+    
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
     
     const enhanceMessages = [
       {
@@ -181,11 +185,12 @@ async function enhanceImagePrompt(userPrompt) {
         temperature: 0.7,
         max_tokens: 100
       }),
-      timeout: 10000
+      signal: controller.signal
     });
 
+    clearTimeout(timeout);
+
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
       console.warn(`Prompt enhancement failed: ${response.status}, using original prompt`);
       return userPrompt;
     }
@@ -193,25 +198,27 @@ async function enhanceImagePrompt(userPrompt) {
     const data = await response.json();
     const enhancedPrompt = data.choices?.[0]?.message?.content?.trim() || userPrompt;
     
-    const finalPrompt = enhancedPrompt.length > 50 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
+    const finalPrompt = enhancedPrompt.length > 200 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
     
     console.log(`Prompt enhanced successfully: "${finalPrompt}"`);
     return finalPrompt;
   } catch (error) {
-    console.warn(`Prompt enhancement error: ${error.message}, using original prompt`);
+    if (error.name === 'AbortError') {
+      console.warn(`Prompt enhancement timeout, using original prompt`);
+    } else {
+      console.warn(`Prompt enhancement error: ${error.message}, using original prompt`);
+    }
     return userPrompt;
   }
 }
 
-// Smart polling function to verify image is ready
+// Optimized smart polling function
 async function verifyImageWithPolling(imageUrl) {
-  const MAX_ATTEMPTS = 7;
-  const INITIAL_DELAY = 3000; // 3 seconds initial wait
-  const POLL_INTERVAL = 1000; // 1 second between checks
+  const MAX_ATTEMPTS = 5;
+  const INITIAL_DELAY = 2000;
+  const POLL_INTERVAL = 800;
   
   console.log(`Starting smart polling for image: ${imageUrl}`);
-  
-  // Initial delay to give the image service time to generate
   console.log(`Initial wait: ${INITIAL_DELAY}ms before first check`);
   await new Promise(resolve => setTimeout(resolve, INITIAL_DELAY));
   
@@ -220,7 +227,7 @@ async function verifyImageWithPolling(imageUrl) {
       console.log(`Polling attempt ${attempt}/${MAX_ATTEMPTS}`);
       
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 5000);
+      const timeout = setTimeout(() => controller.abort(), 3000);
       
       const response = await fetch(imageUrl, {
         method: 'HEAD',
@@ -233,7 +240,6 @@ async function verifyImageWithPolling(imageUrl) {
         const contentType = response.headers.get('content-type');
         console.log(`Response status: ${response.status}, Content-Type: ${contentType}`);
         
-        // Verify it's actually an image
         if (contentType && contentType.startsWith('image/')) {
           console.log(`✓ Image verified successfully on attempt ${attempt}`);
           return {
@@ -241,22 +247,17 @@ async function verifyImageWithPolling(imageUrl) {
             attempts: attempt,
             contentType: contentType
           };
-        } else {
-          console.warn(`Invalid content type: ${contentType}, expected image/*`);
         }
-      } else {
-        console.log(`Response not OK: ${response.status}`);
       }
       
     } catch (error) {
       if (error.name === 'AbortError') {
-        console.warn(`Attempt ${attempt} timed out after 5s`);
+        console.warn(`Attempt ${attempt} timed out after 3s`);
       } else {
         console.warn(`Attempt ${attempt} failed: ${error.message}`);
       }
     }
     
-    // Wait before next attempt (except on last attempt)
     if (attempt < MAX_ATTEMPTS) {
       console.log(`Waiting ${POLL_INTERVAL}ms before next check...`);
       await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
@@ -306,7 +307,7 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.4',
+      version: '1.0.5',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       dependencies: { supabase: 'connected', openRouter: 'connected' }
@@ -336,7 +337,7 @@ app.post('/api/register', authLimiter, async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters', code: 'INVALID_PASSWORD' });
     }
 
-    const { data: existingUser, error: userError } = await supabase
+    const { data: existingUser } = await supabase
       .from('users')
       .select('id')
       .eq('email', sanitizedEmail)
@@ -355,7 +356,7 @@ app.post('/api/register', authLimiter, async (req, res) => {
 
     if (error) {
       console.error(`Register error: ${error.message}`);
-      return res.status(500).json({ error: 'Registration failed', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? error.message : undefined });
+      return res.status(500).json({ error: 'Registration failed', code: 'DATABASE_ERROR' });
     }
 
     const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
@@ -366,11 +367,7 @@ app.post('/api/register', authLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error(`Register error: ${err.message}`);
-    res.status(500).json({
-      error: 'Server error',
-      code: 'SERVER_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
   }
 });
 
@@ -406,11 +403,7 @@ app.post('/api/login', authLimiter, async (req, res) => {
     });
   } catch (err) {
     console.error(`Login error: ${err.message}`);
-    res.status(500).json({
-      error: 'Server error',
-      code: 'SERVER_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
   }
 });
 
@@ -442,7 +435,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
       if (chatError) {
         console.error(`Create chat error: ${chatError.message}`);
-        return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? chatError.message : undefined });
+        return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR' });
       }
       newChatId = chat.id;
     } else {
@@ -454,15 +447,15 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         .maybeSingle();
 
       if (chatError || !chat) {
-        return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
+        return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND' });
       }
       newChatId = chat.id;
     }
 
-    // Save user message first
+    // Save user message
     const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     if (lastUserMessage) {
-      const { error: userMsgError } = await supabase
+      await supabase
         .from('messages')
         .insert([{
           chat_id: newChatId,
@@ -470,13 +463,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
           content: sanitizeInput(lastUserMessage.content),
           timestamp: new Date().toISOString()
         }]);
-
-      if (userMsgError) {
-        console.warn(`Save user message error: ${userMsgError.message}`);
-      }
     }
 
-    // Map 'ai' role to 'assistant' for OpenRouter
+    // Map messages for OpenRouter
     const mappedMessages = messages.map(m => ({
       role: m.role === 'ai' ? 'assistant' : m.role,
       content: sanitizeInput(m.content)
@@ -497,9 +486,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      console.error(`OpenRouter error: status=${response.status}, error=${JSON.stringify(errorData)}`);
-      return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR', details: process.env.NODE_ENV === 'development' ? errorData.error : undefined });
+      console.error(`OpenRouter error: ${response.status}`);
+      return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR' });
     }
 
     const data = await response.json();
@@ -518,11 +506,11 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     if (messageError) {
       console.error(`Save message error: ${messageError.message}`);
-      return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
+      return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
-    // Update chat with last message
-    const { error: updateError } = await supabase
+    // Update chat
+    await supabase
       .from('chats')
       .update({
         last_message: sanitizeInput(lastUserMessage?.content || 'Chat').substring(0, 100),
@@ -530,11 +518,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       })
       .eq('id', newChatId);
 
-    if (updateError) {
-      console.warn(`Update chat error: ${updateError.message}`);
-    }
-
-    console.info(`Chat message processed: chatId=${newChatId}, userId=${userId}`);
+    console.info(`Chat message processed: chatId=${newChatId}`);
     res.json({
       message: aiMessage,
       messageId: savedMessage.id,
@@ -542,16 +526,12 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       timestamp: savedMessage.timestamp
     });
   } catch (err) {
-    console.error(`Chat endpoint error: ${err.message}, stack: ${err.stack}`);
-    res.status(500).json({
-      error: 'Server error',
-      code: 'SERVER_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    console.error(`Chat endpoint error: ${err.message}`);
+    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
   }
 });
 
-// Generate image endpoint with AI-enhanced prompts and smart polling
+// Generate image endpoint - OPTIMIZED
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -570,13 +550,11 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     let newChatId = chatId;
 
     if (chatId && !validateId(chatId)) {
-      console.warn(`Invalid chat ID format: ${chatId}`);
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
     // Create or verify chat
     if (!chatId) {
-      console.log(`Creating new chat for userId=${userId}`);
       const { data: chat, error: chatError } = await supabase
         .from('chats')
         .insert([{ user_id: userId, title: `Image: ${sanitizedPrompt.substring(0, 40)}` }])
@@ -585,28 +563,25 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
       if (chatError) {
         console.error(`Create chat error: ${chatError.message}`);
-        return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? chatError.message : undefined });
+        return res.status(500).json({ error: 'Failed to create chat', code: 'DATABASE_ERROR' });
       }
       newChatId = chat.id;
-      console.info(`New chat created: chatId=${newChatId}`);
     } else {
-      console.log(`Verifying chat: chatId=${chatId}, userId=${userId}`);
-      const { data: chat, error: chatError } = await supabase
+      const { data: chat } = await supabase
         .from('chats')
         .select('id')
         .eq('id', chatId)
         .eq('user_id', userId)
         .maybeSingle();
 
-      if (chatError || !chat) {
-        console.error(`Chat not found: chatId=${chatId}`);
-        return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
+      if (!chat) {
+        return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND' });
       }
       newChatId = chat.id;
     }
 
-    // Save user message first (original prompt)
-    const { error: userMsgError } = await supabase
+    // Save user message
+    await supabase
       .from('messages')
       .insert([{
         chat_id: newChatId,
@@ -615,42 +590,32 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
         timestamp: new Date().toISOString()
       }]);
 
-    if (userMsgError) {
-      console.warn(`Save user message error: ${userMsgError.message}`);
-    }
-
-    // Enhance prompt using AI
+    // Enhance prompt
     console.log(`Enhancing prompt with AI...`);
+    const startTime = Date.now();
+    
     const enhancedPrompt = await enhanceImagePrompt(sanitizedPrompt);
-    console.log(`Using enhanced prompt for image generation`);
-
-    // Generate image URL using enhanced prompt
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
     
     console.info(`Generated image URL with enhanced prompt`);
 
-    // Smart polling to verify the image is ready
+    // Smart polling
     console.log(`Starting smart polling verification...`);
-    const startTime = Date.now();
     const verificationResult = await verifyImageWithPolling(imageUrl);
     const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
     
     if (!verificationResult.success) {
-      console.error(`Image verification failed: ${verificationResult.error}`);
-      return res.status(500).json({
-        error: 'Image generation timeout',
-        code: 'IMAGE_GENERATION_TIMEOUT',
-        details: process.env.NODE_ENV === 'development' ? `Failed after ${verificationResult.attempts} attempts` : undefined
-      });
+      console.warn(`Image verification failed, returning unverified URL`);
     }
 
-    console.log(`✓ Image verified in ${totalTime}s (${verificationResult.attempts} attempts)`);
+    console.log(`${verificationResult.success ? '✓' : '✗'} Image process completed in ${totalTime}s`);
 
-    // Save AI message with image markdown and enhanced prompt info
-    const messageContent = `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Verified in ${totalTime}s (${verificationResult.attempts} checks)*`;
+    // Save AI message
+    const messageContent = verificationResult.success 
+      ? `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Verified in ${totalTime}s (${verificationResult.attempts} checks)*`
+      : `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Generated in ${totalTime}s (verification skipped)*`;
 
-    console.log(`Saving message to Supabase: chatId=${newChatId}`);
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
       .insert([{
@@ -664,12 +629,11 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
     if (messageError) {
       console.error(`Save image message error: ${messageError.message}`);
-      return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
+      return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
     // Update chat
-    console.log(`Updating chat: chatId=${newChatId}`);
-    const { error: updateError } = await supabase
+    await supabase
       .from('chats')
       .update({
         last_message: `Image: ${sanitizedPrompt.substring(0, 50)}`,
@@ -677,11 +641,8 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       })
       .eq('id', newChatId);
 
-    if (updateError) {
-      console.warn(`Update chat error: ${updateError.message}`);
-    }
-
-    console.info(`Image generated successfully: chatId=${newChatId}, userId=${userId}, messageId=${savedMessage.id}, verificationTime=${totalTime}s`);
+    console.info(`Image generated: chatId=${newChatId}, messageId=${savedMessage.id}, time=${totalTime}s`);
+    
     res.json({
       message: messageContent,
       imageUrl: imageUrl,
@@ -691,19 +652,15 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       chatId: newChatId,
       timestamp: savedMessage.timestamp,
       verification: {
-        verified: true,
+        verified: verificationResult.success,
         attempts: verificationResult.attempts,
         totalTime: `${totalTime}s`,
-        contentType: verificationResult.contentType
+        contentType: verificationResult.contentType || 'unknown'
       }
     });
   } catch (err) {
-    console.error(`Image generation error: ${err.message}, stack: ${err.stack}`);
-    res.status(500).json({
-      error: 'Server error',
-      code: 'SERVER_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    console.error(`Image generation error: ${err.message}`);
+    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
   }
 });
 
@@ -715,8 +672,6 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
     const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
     const offset = (page - 1) * limit;
 
-    console.info(`Fetching chat history: userId=${userId}, page=${page}, limit=${limit}`);
-
     const { data: chats, error: chatError } = await supabase
       .from('chats')
       .select('id, title, last_message, created_at, updated_at')
@@ -726,33 +681,25 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
 
     if (chatError) {
       console.error(`Chat history query error: ${chatError.message}`);
-      return res.status(500).json({ error: 'Failed to fetch chat history', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? chatError.message : undefined });
+      return res.status(500).json({ error: 'Failed to fetch chat history', code: 'DATABASE_ERROR' });
     }
 
     const history = await Promise.all(chats.map(async (chat) => {
-      const { data: messages, error: messageError } = await supabase
+      const { data: messages } = await supabase
         .from('messages')
         .select('id, role, content, timestamp')
         .eq('chat_id', chat.id)
         .order('timestamp', { ascending: true })
         .limit(100);
 
-      if (messageError) {
-        console.warn(`Messages query error for chat ${chat.id}: ${messageError.message}`);
-        return { ...chat, messages: [] };
-      }
       return { ...chat, messages: messages || [] };
     }));
 
     console.info(`Chat history retrieved: userId=${userId}, chats=${chats.length}`);
     res.json({ history, page, limit });
   } catch (err) {
-    console.error(`Chat history error: ${err.message}, stack: ${err.stack}`);
-    res.status(500).json({
-      error: 'Server error',
-      code: 'SERVER_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    console.error(`Chat history error: ${err.message}`);
+    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
   }
 });
 
@@ -762,61 +709,29 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
     const { chatId } = req.params;
     const userId = req.user.id;
 
-    console.info(`Delete chat request: chatId=${chatId}, userId=${userId}`);
-
     if (!validateId(chatId)) {
-      console.warn(`Invalid chat ID format: ${chatId}`);
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Verify chat exists and belongs to user
-    const { data: chat, error: chatError } = await supabase
+    const { data: chat } = await supabase
       .from('chats')
       .select('id')
       .eq('id', chatId)
       .eq('user_id', userId)
       .maybeSingle();
 
-    if (chatError || !chat) {
-      console.error(`Chat not found: chatId=${chatId}`);
-      return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND' });
     }
 
-    // Delete messages first (if cascade is not set up)
-    const { error: deleteMessagesError } = await supabase
-      .from('messages')
-      .delete()
-      .eq('chat_id', chatId);
+    await supabase.from('messages').delete().eq('chat_id', chatId);
+    await supabase.from('chats').delete().eq('id', chatId).eq('user_id', userId);
 
-    if (deleteMessagesError) {
-      console.warn(`Delete messages error: ${deleteMessagesError.message}`);
-    }
-
-    // Delete chat
-    const { error: deleteChatError } = await supabase
-      .from('chats')
-      .delete()
-      .eq('id', chatId)
-      .eq('user_id', userId);
-
-    if (deleteChatError) {
-      console.error(`Delete chat error: ${deleteChatError.message}`);
-      return res.status(500).json({
-        error: 'Failed to delete chat',
-        code: 'DATABASE_ERROR',
-        details: process.env.NODE_ENV === 'development' ? deleteChatError.message : undefined
-      });
-    }
-
-    console.info(`Chat deleted: chatId=${chatId}, userId=${userId}`);
+    console.info(`Chat deleted: chatId=${chatId}`);
     res.json({ message: 'Chat deleted successfully', chatId });
   } catch (err) {
-    console.error(`Delete chat error: ${err.message}, stack: ${err.stack}`);
-    res.status(500).json({
-      error: 'Server error',
-      code: 'SERVER_ERROR',
-      details: process.env.NODE_ENV === 'development' ? err.message : undefined
-    });
+    console.error(`Delete chat error: ${err.message}`);
+    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
   }
 });
 
