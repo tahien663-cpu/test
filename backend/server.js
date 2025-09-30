@@ -17,6 +17,9 @@ const { default: cheerio } = await import('cheerio');
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 // Validate environment variables
 const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
 for (const envVar of requiredEnvVars) {
@@ -31,10 +34,8 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// Serve static files for frontend (assuming build folder is present)
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-app.use(express.static(path.join(__dirname, 'build'))); // Adjust 'build' to your frontend build directory
+// Serve static files from the Vite build output (dist folder)
+app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist')));
 
 // Enable trust proxy for Render
 app.set('trust proxy', 1);
@@ -73,9 +74,9 @@ const authLimiter = rateLimit({
 });
 
 const imageLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000,
-  max: 30,
-  message: { error: 'Too many image generation requests, please try again after 1 hour' },
+  windowMs: 60 * 1000,
+  max: 15,
+  message: { error: 'Too many image generation requests, please try again after 1 minute' },
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -956,7 +957,7 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
 
 // Catch-all handler for SPA routing (fixes refresh 404)
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+  res.sendFile(path.join(__dirname, 'test', 'frontend', 'dist', 'index.html'));
 });
 
 // 404 handler
