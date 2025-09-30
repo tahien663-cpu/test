@@ -12,6 +12,20 @@ import apiService from './services/api';
 const ImageMessage = ({ src, alt }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [hasError, setHasError] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+  const maxRetries = 3;
+
+  const handleError = () => {
+    if (retryCount < maxRetries) {
+      setTimeout(() => {
+        setRetryCount(prev => prev + 1);
+        setIsLoading(true); // Trigger reload
+      }, 1000); // Wait 1 second before retrying
+    } else {
+      setIsLoading(false);
+      setHasError(true);
+    }
+  };
 
   return (
     <div className="relative my-2">
@@ -22,14 +36,11 @@ const ImageMessage = ({ src, alt }) => {
       )}
       {!hasError ? (
         <img
-          src={src}
+          src={`${src}${retryCount > 0 ? `?retry=${retryCount}` : ''}`} // Add query param to force reload
           alt={alt || 'Generated Image'}
           className="max-w-full h-auto rounded-lg shadow-lg"
           onLoad={() => setIsLoading(false)}
-          onError={() => {
-            setIsLoading(false);
-            setHasError(true);
-          }}
+          onError={handleError}
           style={{ display: isLoading ? 'none' : 'block' }}
         />
       ) : (
@@ -122,6 +133,7 @@ function parseMarkdown(text) {
       .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
       .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
       .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full h-auto rounded-lg shadow-lg" />')
       .replace(/\n/g, '<br>')
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
       .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
@@ -133,8 +145,8 @@ function parseMarkdown(text) {
       .replace(/^\d+\.\s+(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>');
 
     return DOMPurify.sanitize(html, { 
-      ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button'],
-      ALLOWED_ATTR: ['href', 'target', 'rel', 'class']
+      ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button', 'img'],
+      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt']
     });
   } catch (err) {
     console.error('Markdown parse error:', err);
@@ -460,10 +472,16 @@ export default function Chat() {
         signal: abortControllerRef.current.signal
       });
 
+      console.log('Image API Response:', data); // Log for debugging
+
+      if (!data.imageUrl) {
+        throw new Error('No image URL returned from API');
+      }
+
       const aiMessage = {
         id: data.messageId || `ai-${Date.now()}`,
         role: 'ai',
-        content: data.message || `![Generated Image](${data.imageUrl})`,
+        content: data.message || `![Generated Image](${data.imageUrl || 'https://via.placeholder.com/1024?text=Image+Failed+to+Load'})`,
         timestamp: data.timestamp || new Date().toISOString()
       };
 
@@ -479,7 +497,7 @@ export default function Chat() {
         console.error('Generate image error:', err);
         const errorMsg = err.message.includes('401') || err.message.includes('403')
           ? 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.'
-          : 'Không thể tạo ảnh. Vui lòng thử lại.';
+          : `Không thể tạo ảnh: ${err.message}`;
         
         setError(errorMsg);
         setMessages(prev => [...prev, {
@@ -556,7 +574,7 @@ export default function Chat() {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, scrollToBottom]);
 
   // Theme effect
   useEffect(() => {
