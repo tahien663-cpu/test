@@ -160,16 +160,16 @@ async function enhanceImagePrompt(userPrompt) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     
-    const enhanceMessages = [
-      {
-        role: 'system',
-        content: 'You are a photo editing assistant. Translate the user's image request into English (if it isn't already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 45 characters. Focus on: style, lighting, composition.ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
-      },
-      {
-        role: 'user',
-        content: `Enhance this image prompt: "${userPrompt}"`
-      }
-    ];
+const enhanceMessages = [
+  {
+    role: 'system',
+    content: 'You are a photo editing assistant. Translate the user's image request into English (if it isn't already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 45 characters. Focus on: style, lighting, composition.ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
+  },
+  {
+    role: 'user',
+    content: `Enhance this image prompt: "${userPrompt}"`
+  }
+];
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
