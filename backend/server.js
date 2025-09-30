@@ -113,7 +113,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.2',
+    version: '1.0.3',
     endpoints: [
       '/health',
       '/api/register',
@@ -146,6 +146,59 @@ function sanitizeInput(input) {
 // Validate UUID
 function validateId(id) {
   return validate(id);
+}
+
+// Enhance image prompt using AI
+async function enhanceImagePrompt(userPrompt) {
+  try {
+    console.log(`Starting prompt enhancement for: "${userPrompt}"`);
+    
+    const enhanceMessages = [
+      {
+        role: 'system',
+        content: 'You are a prompt enhancement assistant. Translate the user\'s image request to English (if not already) and enhance it with artistic details to create a beautiful image. Keep the enhanced prompt under 200 characters. Focus on: style, lighting, composition, and mood. Return ONLY the enhanced prompt, nothing else.'
+      },
+      {
+        role: 'user',
+        content: `Enhance this image prompt: "${userPrompt}"`
+      }
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({
+        model: 'x-ai/grok-4-fast:free',
+        messages: enhanceMessages,
+        temperature: 0.7,
+        max_tokens: 100
+      }),
+      timeout: 10000
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.warn(`Prompt enhancement failed: ${response.status}, using original prompt`);
+      return userPrompt;
+    }
+
+    const data = await response.json();
+    const enhancedPrompt = data.choices?.[0]?.message?.content?.trim() || userPrompt;
+    
+    // Ensure prompt is not too long
+    const finalPrompt = enhancedPrompt.length > 200 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
+    
+    console.log(`Prompt enhanced successfully: "${finalPrompt}"`);
+    return finalPrompt;
+  } catch (error) {
+    console.warn(`Prompt enhancement error: ${error.message}, using original prompt`);
+    return userPrompt;
+  }
 }
 
 // JWT authentication middleware
@@ -183,7 +236,7 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.2',
+      version: '1.0.3',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       dependencies: { supabase: 'connected', openRouter: 'connected' }
@@ -428,7 +481,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
-// Generate image endpoint - FIXED
+// Generate image endpoint with AI-enhanced prompts
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -482,7 +535,7 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       newChatId = chat.id;
     }
 
-    // Save user message first
+    // Save user message first (original prompt)
     const { error: userMsgError } = await supabase
       .from('messages')
       .insert([{
@@ -496,15 +549,16 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       console.warn(`Save user message error: ${userMsgError.message}`);
     }
 
-    // Generate image URL using pollinations.ai
-    // The API returns a redirect to the actual image, so we follow redirects
-    console.log(`Generating image with prompt: ${sanitizedPrompt}`);
-    
-    // Build the image URL directly - pollinations.ai returns the image itself
-    const encodedPrompt = encodeURIComponent(sanitizedPrompt);
+    // Enhance prompt using AI
+    console.log(`Enhancing prompt with AI...`);
+    const enhancedPrompt = await enhanceImagePrompt(sanitizedPrompt);
+    console.log(`Using enhanced prompt for image generation`);
+
+    // Generate image URL using enhanced prompt
+    const encodedPrompt = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
     
-    console.info(`Generated image URL: ${imageUrl}`);
+    console.info(`Generated image URL with enhanced prompt`);
 
     // Verify the image URL is accessible
     try {
@@ -530,8 +584,8 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       });
     }
 
-    // Save AI message with image markdown
-    const messageContent = `![Generated Image](${imageUrl})`;
+    // Save AI message with image markdown and enhanced prompt info
+    const messageContent = `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*`;
 
     console.log(`Saving message to Supabase: chatId=${newChatId}`);
     const { data: savedMessage, error: messageError } = await supabase
@@ -568,6 +622,8 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     res.json({
       message: messageContent,
       imageUrl: imageUrl,
+      enhancedPrompt: enhancedPrompt,
+      originalPrompt: sanitizedPrompt,
       messageId: savedMessage.id,
       chatId: newChatId,
       timestamp: savedMessage.timestamp
@@ -805,6 +861,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`Server started on port ${process.env.PORT || 3001}`);
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
+  console.info(`AI-enhanced image prompts: enabled`);
 });
 
 process.on('SIGTERM', () => {
