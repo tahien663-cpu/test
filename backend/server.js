@@ -160,16 +160,16 @@ async function enhanceImagePrompt(userPrompt) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     
-const enhanceMessages = [
-  {
-    role: 'system',
-    content: 'You are a photo editing assistant. Translate the user\'s image request into English (if it isn\'t already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 45 characters. Focus on: style, lighting, composition.ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
-  },
-  {
-    role: 'user',
-    content: `Enhance this image prompt: "${userPrompt}"`
-  }
-];
+    const enhanceMessages = [
+      {
+        role: 'system',
+        content: 'You are a photo editing assistant. Translate the user\'s image request into English (if it isn\'t already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 45 characters. Focus on: style, lighting, composition.ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
+      },
+      {
+        role: 'user',
+        content: `Enhance this image prompt: "${userPrompt}"`
+      }
+    ];
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
@@ -531,7 +531,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
-// Generate image endpoint - OPTIMIZED
+// Generate image endpoint - OPTIMIZED with Proxy
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -597,12 +597,53 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     const enhancedPrompt = await enhanceImagePrompt(sanitizedPrompt);
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
-    
+
+    // Fetch the image to proxy
+    console.log(`Fetching image from: ${imageUrl}`);
+    const imageResponse = await fetch(imageUrl, {
+      method: 'GET',
+      headers: {
+        'Accept': 'image/*'
+      }
+    });
+
+    if (!imageResponse.ok) {
+      console.error(`Image fetch failed: ${imageResponse.status}`);
+      return res.status(500).json({ error: 'Failed to fetch image', code: 'IMAGE_FETCH_ERROR' });
+    }
+
+    const contentType = imageResponse.headers.get('content-type');
+    if (!contentType || !contentType.startsWith('image/')) {
+      console.error(`Invalid content type: ${contentType}`);
+      return res.status(500).json({ error: 'Invalid image response', code: 'INVALID_IMAGE_RESPONSE' });
+    }
+
+    // Optionally store the image in Supabase storage
+    const imageId = uuidv4();
+    const imageBuffer = await imageResponse.buffer();
+    let finalImageUrl = imageUrl;
+
+    const { error: storageError } = await supabase.storage
+      .from('images')
+      .upload(`public/${imageId}.png`, imageBuffer, {
+        contentType: contentType,
+        upsert: true
+      });
+
+    if (storageError) {
+      console.warn(`Storage error: ${storageError.message}, falling back to external URL`);
+    } else {
+      const { data: signedUrlData } = await supabase.storage
+        .from('images')
+        .createSignedUrl(`public/${imageId}.png`, 60 * 60 * 24); // 1-day expiration
+      finalImageUrl = signedUrlData?.signedUrl || imageUrl;
+    }
+
     console.info(`Generated image URL with enhanced prompt`);
 
-    // Smart polling
+    // Smart polling (optional, since we already fetched the image)
     console.log(`Starting smart polling verification...`);
-    const verificationResult = await verifyImageWithPolling(imageUrl);
+    const verificationResult = await verifyImageWithPolling(finalImageUrl);
     const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
     
     if (!verificationResult.success) {
@@ -613,8 +654,8 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
     // Save AI message
     const messageContent = verificationResult.success 
-      ? `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Verified in ${totalTime}s (${verificationResult.attempts} checks)*`
-      : `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Generated in ${totalTime}s (verification skipped)*`;
+      ? `![Generated Image](${finalImageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Verified in ${totalTime}s (${verificationResult.attempts} checks)*`
+      : `![Generated Image](${finalImageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Generated in ${totalTime}s (verification skipped)*`;
 
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
@@ -645,7 +686,7 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     
     res.json({
       message: messageContent,
-      imageUrl: imageUrl,
+      imageUrl: finalImageUrl,
       enhancedPrompt: enhancedPrompt,
       originalPrompt: sanitizedPrompt,
       messageId: savedMessage.id,
@@ -846,7 +887,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
   console.info(`AI-enhanced image prompts: enabled`);
-  console.info(`Smart polling verification: enabled (3s initial + 7x1s checks)`);
+  console.info(`Smart polling verification: enabled (2s initial + 5x0.8s checks)`);
 });
 
 process.on('SIGTERM', () => {
