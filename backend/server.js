@@ -1,3 +1,4 @@
+
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -10,8 +11,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import xss from 'xss';
 import { validate } from 'uuid';
-
-const { default: cheerio } = await import('cheerio');
+import { default as cheerio } from 'cheerio';
 
 dotenv.config();
 
@@ -51,7 +51,7 @@ app.use(helmet({
 
 // Rate limiting
 const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
   message: { error: 'Too many requests from this IP, please try again after 15 minutes' },
   standardHeaders: true,
@@ -59,7 +59,7 @@ const generalLimiter = rateLimit({
 });
 
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 5,
   message: { error: 'Too many login/register attempts, please try again after 15 minutes' },
   skipSuccessfulRequests: true
@@ -101,7 +101,6 @@ app.use(cors({
   credentials: true
 }));
 
-// Handle preflight requests
 app.options('*', cors());
 
 app.use(express.json({ limit: '10mb' }));
@@ -113,7 +112,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.3',
+    version: '1.0.4',
     endpoints: [
       '/health',
       '/api/register',
@@ -190,7 +189,6 @@ async function enhanceImagePrompt(userPrompt) {
     const data = await response.json();
     const enhancedPrompt = data.choices?.[0]?.message?.content?.trim() || userPrompt;
     
-    // Ensure prompt is not too long
     const finalPrompt = enhancedPrompt.length > 50 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
     
     console.log(`Prompt enhanced successfully: "${finalPrompt}"`);
@@ -236,7 +234,7 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.3',
+      version: '1.0.4',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       dependencies: { supabase: 'connected', openRouter: 'connected' }
@@ -361,7 +359,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Create or verify chat
     if (!chatId) {
       const firstMessage = sanitizeInput(messages[0]?.content || 'New chat');
       const { data: chat, error: chatError } = await supabase
@@ -389,7 +386,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       newChatId = chat.id;
     }
 
-    // Save user message first
     const lastUserMessage = messages.filter(m => m.role === 'user').pop();
     if (lastUserMessage) {
       const { error: userMsgError } = await supabase
@@ -406,7 +402,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
     }
 
-    // Map 'ai' role to 'assistant' for OpenRouter
     const mappedMessages = messages.map(m => ({
       role: m.role === 'ai' ? 'assistant' : m.role,
       content: sanitizeInput(m.content)
@@ -451,7 +446,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
     }
 
-    // Update chat with last message
     const { error: updateError } = await supabase
       .from('chats')
       .update({
@@ -481,7 +475,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
-// Generate image endpoint with AI-enhanced prompts
+// Generate image endpoint with AI-enhanced prompts and smart polling
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -504,7 +498,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Create or verify chat
     if (!chatId) {
       console.log(`Creating new chat for userId=${userId}`);
       const { data: chat, error: chatError } = await supabase
@@ -535,7 +528,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       newChatId = chat.id;
     }
 
-    // Save user message first (original prompt)
     const { error: userMsgError } = await supabase
       .from('messages')
       .insert([{
@@ -549,42 +541,70 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       console.warn(`Save user message error: ${userMsgError.message}`);
     }
 
-    // Enhance prompt using AI
     console.log(`Enhancing prompt with AI...`);
     const enhancedPrompt = await enhanceImagePrompt(sanitizedPrompt);
     console.log(`Using enhanced prompt for image generation`);
 
-    // Generate image URL using enhanced prompt
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
     
     console.info(`Generated image URL with enhanced prompt`);
 
-    // Verify the image URL is accessible
-    try {
-      const verifyResponse = await fetch(imageUrl, { 
-        method: 'HEAD',
-        timeout: 10000
-      });
-      
-      if (!verifyResponse.ok) {
-        console.error(`Image URL not accessible: status=${verifyResponse.status}`);
-        return res.status(500).json({
-          error: 'Failed to generate image',
-          code: 'IMAGE_GENERATION_ERROR',
-          details: process.env.NODE_ENV === 'development' ? `Status: ${verifyResponse.status}` : undefined
+    // Smart polling system to verify image generation
+    console.log(`Starting smart polling for image: ${imageUrl}`);
+    
+    await new Promise(resolve => setTimeout(resolve, 3000));
+    
+    const maxAttempts = 7;
+    const pollInterval = 1000;
+    let imageReady = false;
+    let lastError = null;
+    
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        console.log(`Polling attempt ${attempt}/${maxAttempts} for image...`);
+        
+        const verifyResponse = await fetch(imageUrl, { 
+          method: 'HEAD',
+          timeout: 5000
         });
+        
+        console.log(`Attempt ${attempt}: status=${verifyResponse.status}, content-type=${verifyResponse.headers.get('content-type')}`);
+        
+        if (verifyResponse.ok) {
+          const contentType = verifyResponse.headers.get('content-type');
+          
+          if (contentType && contentType.startsWith('image/')) {
+            console.info(`✓ Image ready after ${attempt} attempts (${3 + (attempt - 1)}s)`);
+            imageReady = true;
+            break;
+          } else {
+            console.warn(`Attempt ${attempt}: Invalid content-type: ${contentType}`);
+            lastError = `Invalid content type: ${contentType}`;
+          }
+        } else {
+          console.warn(`Attempt ${attempt}: HTTP ${verifyResponse.status}`);
+          lastError = `HTTP ${verifyResponse.status}`;
+        }
+      } catch (pollError) {
+        console.warn(`Attempt ${attempt} failed: ${pollError.message}`);
+        lastError = pollError.message;
       }
-    } catch (verifyError) {
-      console.error(`Image verification failed: ${verifyError.message}`);
+      
+      if (attempt < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+      }
+    }
+    
+    if (!imageReady) {
+      console.error(`Image generation timeout after ${maxAttempts} attempts. Last error: ${lastError}`);
       return res.status(500).json({
-        error: 'Failed to verify image',
-        code: 'IMAGE_VERIFICATION_ERROR',
-        details: process.env.NODE_ENV === 'development' ? verifyError.message : undefined
+        error: 'Image generation timeout',
+        code: 'IMAGE_GENERATION_TIMEOUT',
+        details: process.env.NODE_ENV === 'development' ? `Timeout after ${3 + (maxAttempts - 1)}s. Last error: ${lastError}` : undefined
       });
     }
 
-    // Save AI message with image markdown and enhanced prompt info
     const messageContent = `![Generated Image](${imageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*`;
 
     console.log(`Saving message to Supabase: chatId=${newChatId}`);
@@ -604,7 +624,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? messageError.message : undefined });
     }
 
-    // Update chat
     console.log(`Updating chat: chatId=${newChatId}`);
     const { error: updateError } = await supabase
       .from('chats')
@@ -700,7 +719,6 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Invalid chat ID format', code: 'INVALID_CHAT_ID' });
     }
 
-    // Verify chat exists and belongs to user
     const { data: chat, error: chatError } = await supabase
       .from('chats')
       .select('id')
@@ -713,7 +731,6 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
       return res.status(404).json({ error: 'Chat not found or unauthorized', code: 'CHAT_NOT_FOUND', details: process.env.NODE_ENV === 'development' ? chatError?.message : undefined });
     }
 
-    // Delete messages first (if cascade is not set up)
     const { error: deleteMessagesError } = await supabase
       .from('messages')
       .delete()
@@ -723,7 +740,6 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
       console.warn(`Delete messages error: ${deleteMessagesError.message}`);
     }
 
-    // Delete chat
     const { error: deleteChatError } = await supabase
       .from('chats')
       .delete()
@@ -795,7 +811,6 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? deleteError.message : undefined });
     }
 
-    // Update chat's last_message
     const { data: lastMessage, error: lastMessageError } = await supabase
       .from('messages')
       .select('content')
@@ -840,7 +855,6 @@ app.use('*', (req, res) => {
 app.use((err, req, res, next) => {
   console.error(`Unhandled error: ${err.message}, stack: ${err.stack}`);
   
-  // Handle CORS errors
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
       error: 'CORS error',
