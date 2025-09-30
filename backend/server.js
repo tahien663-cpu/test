@@ -163,7 +163,7 @@ async function enhanceImagePrompt(userPrompt) {
     const enhanceMessages = [
       {
         role: 'system',
-        content: 'You are a prompt enhancement assistant. Translate the user\'s image request to English (if not already) and enhance it with artistic details to create a beautiful image. Keep the enhanced prompt under 45 characters. Focus on: style, lighting, composition. Return ONLY the enhanced prompt, nothing else.'
+        content: 'You are a photo editing assistant. Translate the user's image request into English (if it isn't already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 45 characters. Focus on: style, lighting, composition. ABSOLUTELY no periods (.) or commas (,). ONLY return the photo editing prompt, nothing else.'
       },
       {
         role: 'user',
