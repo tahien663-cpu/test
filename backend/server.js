@@ -191,7 +191,7 @@ async function enhanceImagePrompt(userPrompt) {
     const enhancedPrompt = data.choices?.[0]?.message?.content?.trim() || userPrompt;
     
     // Ensure prompt is not too long
-    const finalPrompt = enhancedPrompt.length > 200 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
+    const finalPrompt = enhancedPrompt.length > 120 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
     
     console.log(`Prompt enhanced successfully: "${finalPrompt}"`);
     return finalPrompt;
