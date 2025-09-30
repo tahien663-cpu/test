@@ -10,6 +10,8 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import xss from 'xss';
 import { validate } from 'uuid';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const { default: cheerio } = await import('cheerio');
 
@@ -28,6 +30,11 @@ const app = express();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
+
+// Serve static files for frontend (assuming build folder is present)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+app.use(express.static(path.join(__dirname, 'build'))); // Adjust 'build' to your frontend build directory
 
 // Enable trust proxy for Render
 app.set('trust proxy', 1);
@@ -66,9 +73,9 @@ const authLimiter = rateLimit({
 });
 
 const imageLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 15,
-  message: { error: 'Too many image generation requests, please try again after 1 minute' },
+  windowMs: 60 * 60 * 1000,
+  max: 30,
+  message: { error: 'Too many image generation requests, please try again after 1 hour' },
   standardHeaders: true,
   legacyHeaders: false
 });
@@ -272,6 +279,85 @@ async function verifyImageWithPolling(imageUrl) {
   };
 }
 
+// Function to search DuckDuckGo and extract results
+async function searchDuckDuckGo(query) {
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const response = await fetch(`https://duckduckgo.com/html/?q=${encodedQuery}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`DuckDuckGo search failed: ${response.status}`);
+    }
+
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    const results = [];
+
+    $('.result').each((i, el) => {
+      if (i >= 5) return false; // Limit to top 5 results
+      
+      const title = $(el).find('.result__title').text().trim();
+      const link = $(el).find('.result__a').attr('href');
+      const snippet = $(el).find('.result__snippet').text().trim();
+      
+      if (title && link && snippet) {
+        results.push({ title, link, snippet });
+      }
+    });
+
+    return results;
+  } catch (error) {
+    console.error(`DuckDuckGo search error: ${error.message}`);
+    return [];
+  }
+}
+
+// Function to summarize search results with AI
+async function summarizeWithAI(query, searchResults) {
+  try {
+    const summaryMessages = [
+      {
+        role: 'system',
+        content: 'You are a helpful assistant that summarizes web search results concisely. If the user query is short (under 20 words), keep your response brief and to the point. Structure the summary with key points, sources, and be accurate. Respond in Vietnamese if the query is in Vietnamese.'
+      },
+      {
+        role: 'user',
+        content: `Summarize these search results for the query "${query}":\n\n${searchResults.map(r => `- ${r.title}: ${r.snippet} (Source: ${r.link})`).join('\n')}`
+      }
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({
+        model: 'x-ai/grok-4-fast:free',
+        messages: summaryMessages,
+        temperature: 0.7,
+        max_tokens: 500
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`AI summarization failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || 'No summary available.';
+  } catch (error) {
+    console.error(`AI summarization error: ${error.message}`);
+    return 'Failed to summarize results.';
+  }
+}
+
 // JWT authentication middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -465,33 +551,50 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         }]);
     }
 
-    // Map messages for OpenRouter
-    const mappedMessages = messages.map(m => ({
-      role: m.role === 'ai' ? 'assistant' : m.role,
-      content: sanitizeInput(m.content)
-    }));
+    // Check if this is a web search request
+    let aiMessage = '';
+    const userContent = lastUserMessage?.content || '';
+    const isWebSearch = userContent.toLowerCase().startsWith('tìm kiếm web:');
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openRouterKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://hein1.onrender.com',
-        'X-Title': 'Hein AI'
-      },
-      body: JSON.stringify({
-        model: 'x-ai/grok-4-fast:free',
-        messages: mappedMessages
-      })
-    });
+    if (isWebSearch) {
+      const searchQuery = userContent.replace(/^tìm kiếm web:/i, '').trim();
+      const searchResults = await searchDuckDuckGo(searchQuery);
+      
+      if (searchResults.length > 0) {
+        aiMessage = await summarizeWithAI(searchQuery, searchResults);
+      } else {
+        aiMessage = 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
+      }
+    } else {
+      // Regular AI response
+      // Map messages for OpenRouter
+      const mappedMessages = messages.map(m => ({
+        role: m.role === 'ai' ? 'assistant' : m.role,
+        content: sanitizeInput(m.content)
+      }));
 
-    if (!response.ok) {
-      console.error(`OpenRouter error: ${response.status}`);
-      return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR' });
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openRouterKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': 'https://hein1.onrender.com',
+          'X-Title': 'Hein AI'
+        },
+        body: JSON.stringify({
+          model: 'x-ai/grok-4-fast:free',
+          messages: mappedMessages
+        })
+      });
+
+      if (!response.ok) {
+        console.error(`OpenRouter error: ${response.status}`);
+        return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR' });
+      }
+
+      const data = await response.json();
+      aiMessage = data.choices?.[0]?.message?.content || 'No response from AI';
     }
-
-    const data = await response.json();
-    const aiMessage = data.choices?.[0]?.message?.content || 'No response from AI';
 
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
@@ -849,6 +952,11 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       details: process.env.NODE_ENV === 'development' ? err.message : undefined
     });
   }
+});
+
+// Catch-all handler for SPA routing (fixes refresh 404)
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
 // 404 handler
