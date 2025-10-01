@@ -62,7 +62,7 @@ const parseMarkdown = (text) => {
       .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
       .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
       .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<div class="my-3 relative group"><img src="$2" alt="$1" class="max-w-full h-auto rounded-xl my-3 shadow-lg" /><button class="download-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all" data-url="$2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5M12 15V3"></path></svg></button></div>')
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<div class="my-3 relative group" data-image-url="$2"><img src="$2" alt="$1" class="max-w-full h-auto rounded-xl my-3 shadow-lg" /></div>')
       .replace(/\n/g, '<br>')
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
       .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
@@ -74,8 +74,8 @@ const parseMarkdown = (text) => {
       .replace(/^\d+\.\s+(.*)$/gm, '<li class="ml-4 list-decimal text-gray-900 dark:text-white">$1</li>');
 
     return DOMPurify.sanitize(html, { 
-      ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button', 'img'],
-      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt', 'data-code', 'data-url']
+      ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'img'],
+      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt', 'data-code', 'data-image-url']
     });
   } catch (err) {
     console.error('Markdown parse error:', err);
@@ -129,9 +129,12 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
     const handleDownload = (e) => {
       if (e.target.closest('.download-btn')) {
         const btn = e.target.closest('.download-btn');
-        const url = btn.getAttribute('data-url');
+        const url = btn.closest('[data-image-url]').getAttribute('data-image-url');
         fetch(url, { mode: 'cors' })
-          .then(response => response.blob())
+          .then(response => {
+            if (!response.ok) throw new Error('Không thể tải ảnh');
+            return response.blob();
+          })
           .then(blob => {
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
@@ -158,6 +161,22 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
       contentRef.current?.removeEventListener('click', handleDownload);
     };
   }, [msg.content]);
+
+  // Add download button to images after DOM is rendered
+  useEffect(() => {
+    if (!contentRef.current) return;
+    const imageDivs = contentRef.current.querySelectorAll('[data-image-url]');
+    imageDivs.forEach(div => {
+      if (!div.querySelector('.download-btn')) {
+        const button = document.createElement('button');
+        button.className = `download-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all`;
+        button.setAttribute('aria-label', 'Download image');
+        button.setAttribute('title', 'Tải ảnh xuống');
+        button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>`;
+        div.appendChild(button);
+      }
+    });
+  }, [msg.content, theme]);
   
   return (
     <div className={`flex gap-3 mb-6 ${isUser ? 'flex-row-reverse' : 'flex-row'} group`}>
@@ -354,7 +373,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${
                 theme === 'dark' 
                   ? 'hover:bg-gray-800 text-white' 
-                  : 'hover:bg-gray-100 text-gray-900'
+                  : 'hover:bg-gray-200 text-gray-900'
               }`}
             >
               <Settings className="w-5 h-5" />
