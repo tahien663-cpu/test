@@ -2,120 +2,14 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
-  Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, Home, Bold, Italic, Code, 
-  Globe, Image, ChevronDown, StopCircle
+  Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, MessageSquare, X, 
+  Image, Globe, Mic, StopCircle, Bold, Italic, Code, ChevronDown
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
 
-// Image Message Component
-const ImageMessage = ({ src, alt }) => {
-  const [isLoading, setIsLoading] = useState(true);
-  const [hasError, setHasError] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const maxRetries = 3;
-
-  const handleError = () => {
-    if (retryCount < maxRetries) {
-      setTimeout(() => {
-        setRetryCount(prev => prev + 1);
-        setIsLoading(true); // Trigger reload
-      }, 1000); // Wait 1 second before retrying
-    } else {
-      setIsLoading(false);
-      setHasError(true);
-    }
-  };
-
-  return (
-    <div className="relative my-2">
-      {isLoading && (
-        <div className="flex items-center justify-center bg-gray-200 dark:bg-gray-700 rounded-lg p-8">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
-        </div>
-      )}
-      {!hasError ? (
-        <img
-          src={`${src}${retryCount > 0 ? `?retry=${retryCount}` : ''}`} // Add query param to force reload
-          alt={alt || 'Generated Image'}
-          className="max-w-full h-auto rounded-lg shadow-lg"
-          onLoad={() => setIsLoading(false)}
-          onError={handleError}
-          style={{ display: isLoading ? 'none' : 'block' }}
-        />
-      ) : (
-        <div className="bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 p-4 rounded-lg">
-          <p className="font-medium">Không thể tải ảnh</p>
-          <p className="text-sm mt-1">URL: {src}</p>
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Message Content Component
-const MessageContent = ({ content, role }) => {
-  // Check if content contains image markdown
-  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
-  const hasImage = imageRegex.test(content);
-
-  if (hasImage) {
-    const parts = [];
-    let lastIndex = 0;
-    const regex = /!\[([^\]]*)\]\(([^)]+)\)/g;
-    let match;
-
-    while ((match = regex.exec(content)) !== null) {
-      // Add text before image
-      if (match.index > lastIndex) {
-        const textBefore = content.substring(lastIndex, match.index);
-        if (textBefore.trim()) {
-          parts.push({ type: 'text', content: textBefore });
-        }
-      }
-
-      // Add image
-      parts.push({ type: 'image', alt: match[1], src: match[2] });
-      lastIndex = regex.lastIndex;
-    }
-
-    // Add remaining text
-    if (lastIndex < content.length) {
-      const textAfter = content.substring(lastIndex);
-      if (textAfter.trim()) {
-        parts.push({ type: 'text', content: textAfter });
-      }
-    }
-
-    return (
-      <div>
-        {parts.map((part, index) => {
-          if (part.type === 'image') {
-            return <ImageMessage key={index} src={part.src} alt={part.alt} />;
-          }
-          return (
-            <div 
-              key={index}
-              className="prose prose-sm dark:prose-invert max-w-none"
-              dangerouslySetInnerHTML={{ __html: parseMarkdown(part.content) }}
-            />
-          );
-        })}
-      </div>
-    );
-  }
-
-  // Regular text content
-  return (
-    <div 
-      className="prose prose-sm dark:prose-invert max-w-none"
-      dangerouslySetInnerHTML={{ __html: parseMarkdown(content) }}
-    />
-  );
-};
-
-// Enhanced markdown parser
-function parseMarkdown(text) {
+// ==================== UTILITIES ====================
+const parseMarkdown = (text) => {
   if (!text || typeof text !== 'string') return '';
   
   try {
@@ -125,15 +19,15 @@ function parseMarkdown(text) {
       .replace(/>/g, '&gt;')
       .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
         const langClass = lang ? ` language-${lang}` : '';
-        return `<div class="relative my-2"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-lg overflow-x-auto shadow-sm"><code class="${langClass}">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-code-btn absolute top-2 right-2 px-2 py-1 rounded bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-300 dark:hover:bg-gray-500 transition-colors text-sm font-medium">Copy</button></div>`;
+        return `<div class="my-3 relative group"><pre class="bg-gray-800 dark:bg-gray-950 p-4 rounded-xl overflow-x-auto text-sm"><code class="${langClass} text-gray-100">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-all" data-code="${code.trim().replace(/"/g, '&quot;')}"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg></button></div>`;
       })
-      .replace(/`([^`]+)`/g, '<code class="bg-gray-100 dark:bg-gray-800 px-1 py-0.5 rounded text-sm">$1</code>')
-      .replace(/\*\*(.*?)\*\*/g, '<strong class="font-bold">$1</strong>')
+      .replace(/`([^`]+)`/g, '<code class="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-sm font-mono">$1</code>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong class="font-bold">$1</strong>')
       .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
       .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
       .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
       .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full h-auto rounded-lg shadow-lg" />')
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full h-auto rounded-xl my-3 shadow-lg" />')
       .replace(/\n/g, '<br>')
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
       .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
@@ -146,14 +40,216 @@ function parseMarkdown(text) {
 
     return DOMPurify.sanitize(html, { 
       ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button', 'img'],
-      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt']
+      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt', 'data-code']
     });
   } catch (err) {
     console.error('Markdown parse error:', err);
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
-}
+};
 
+const formatTime = (timestamp) => {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatDate = (timestamp) => {
+  if (!timestamp) return '';
+  const date = new Date(timestamp);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+
+  if (date.toDateString() === today.toDateString()) return 'Hôm nay';
+  if (date.toDateString() === yesterday.toDateString()) return 'Hôm qua';
+  
+  return date.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' });
+};
+
+// ==================== COMPONENTS ====================
+const MessageBubble = ({ msg, userName, onDelete, theme }) => {
+  const isUser = msg.role === 'user';
+  const contentRef = useRef(null);
+  
+  useEffect(() => {
+    if (!contentRef.current) return;
+    
+    const handleCopy = (e) => {
+      if (e.target.closest('.copy-btn')) {
+        const btn = e.target.closest('.copy-btn');
+        const code = btn.getAttribute('data-code');
+        navigator.clipboard.writeText(code)
+          .then(() => {
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+            setTimeout(() => {
+              btn.innerHTML = originalHTML;
+            }, 2000);
+          })
+          .catch(err => console.error('Copy error:', err));
+      }
+    };
+    
+    contentRef.current.addEventListener('click', handleCopy);
+    return () => contentRef.current?.removeEventListener('click', handleCopy);
+  }, [msg.content]);
+  
+  return (
+    <div className={`flex gap-3 mb-6 ${isUser ? 'flex-row-reverse' : 'flex-row'} group`}>
+      <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${isUser ? 'bg-blue-500' : 'bg-gradient-to-br from-purple-500 to-pink-500'} shadow-lg`}>
+        {isUser ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-white" />}
+      </div>
+      <div className={`max-w-[75%] md:max-w-[65%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
+        <div className={`px-4 py-3 rounded-2xl ${isUser ? 'bg-blue-500 text-white rounded-tr-md' : theme === 'dark' ? 'bg-gray-800 text-white rounded-tl-md' : 'bg-gray-100 text-gray-900 rounded-tl-md'} shadow-md`}>
+          <div 
+            ref={contentRef}
+            className="text-[15px] leading-relaxed prose prose-sm dark:prose-invert max-w-none"
+            dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
+          />
+        </div>
+        <div className="flex items-center gap-2 mt-1.5 px-1">
+          <span className="text-xs text-gray-400">{formatTime(msg.timestamp)}</span>
+          {isUser && msg.id !== 'welcome' && (
+            <button 
+              onClick={() => onDelete(msg.id)}
+              className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-500/20 rounded transition-all"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-red-500" />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ChatHistoryItem = ({ chat, isActive, onClick, onDelete, theme }) => (
+  <div
+    onClick={onClick}
+    className={`p-3 rounded-xl cursor-pointer group transition-all ${isActive ? 'bg-blue-500/10 border border-blue-500/20' : theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
+  >
+    <div className="flex items-start justify-between gap-2">
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-1">
+          <MessageSquare className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-blue-500' : 'text-gray-400'}`} />
+          <p className={`font-medium text-sm truncate ${isActive ? 'text-blue-500' : ''}`}>{chat.title || 'Cuộc trò chuyện mới'}</p>
+        </div>
+        <p className="text-xs text-gray-400 truncate pl-6">{chat.last_message || 'Không có tin nhắn'}</p>
+      </div>
+      <button 
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete(chat.id);
+        }}
+        className="opacity-0 group-hover:opacity-100 p-1.5 hover:bg-red-500/20 rounded-lg transition-all"
+      >
+        <Trash2 className="w-4 h-4 text-red-500" />
+      </button>
+    </div>
+  </div>
+);
+
+const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentChatId, onChatSelect, onNewChat, onDeleteChat, searchTerm, onSearchChange }) => {
+  const groupedChats = useMemo(() => {
+    const groups = {};
+    chatHistory.forEach(chat => {
+      const date = formatDate(chat.created_at || chat.timestamp);
+      if (!groups[date]) groups[date] = [];
+      groups[date].push(chat);
+    });
+    return groups;
+  }, [chatHistory]);
+
+  return (
+    <>
+      <div className={`fixed inset-y-0 left-0 z-50 w-80 transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'} lg:relative lg:translate-x-0 ${theme === 'dark' ? 'bg-gray-950 border-r border-gray-800' : 'bg-gray-50 border-r border-gray-200'}`}>
+        <div className="h-full flex flex-col">
+          <div className="p-4 border-b border-gray-800 dark:border-gray-700">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg">
+                  <Bot className="w-5 h-5 text-white" />
+                </div>
+                <span className="font-bold text-lg bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">Hein AI</span>
+              </div>
+              <button 
+                onClick={onClose}
+                className="lg:hidden p-2 hover:bg-gray-800 dark:hover:bg-gray-700 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <button 
+              onClick={onNewChat}
+              className="w-full flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white rounded-xl transition-all shadow-lg hover:shadow-xl transform hover:scale-[1.02]"
+            >
+              <Plus className="w-5 h-5" />
+              <span className="font-medium">Cuộc trò chuyện mới</span>
+            </button>
+          </div>
+
+          <div className="p-4">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => onSearchChange(e.target.value)}
+                placeholder="Tìm kiếm..."
+                className={`w-full pl-10 pr-4 py-2.5 rounded-xl ${theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500' : 'bg-white text-gray-900 placeholder-gray-400'} border border-gray-700 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition`}
+              />
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto px-4 space-y-4">
+            {Object.entries(groupedChats).map(([date, chats]) => (
+              <div key={date}>
+                <h3 className="text-xs font-semibold text-gray-400 mb-2 px-2">{date}</h3>
+                <div className="space-y-1">
+                  {chats.filter(chat => (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())).map(chat => (
+                    <ChatHistoryItem
+                      key={chat.id}
+                      chat={chat}
+                      isActive={currentChatId === chat.id}
+                      onClick={() => onChatSelect(chat.id)}
+                      onDelete={onDeleteChat}
+                      theme={theme}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="p-4 border-t border-gray-800 dark:border-gray-700 space-y-1">
+            <button className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}>
+              <Settings className="w-5 h-5" />
+              <span className="text-sm">Cài đặt</span>
+            </button>
+            <button 
+              onClick={onThemeToggle}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
+            >
+              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              <span className="text-sm">{theme === 'dark' ? 'Chế độ sáng' : 'Chế độ tối'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={onClose}
+        />
+      )}
+    </>
+  );
+};
+
+// ==================== MAIN COMPONENT ====================
 export default function Chat() {
   const navigate = useNavigate();
   const [messages, setMessages] = useState([
@@ -167,7 +263,7 @@ export default function Chat() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentChatId, setCurrentChatId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [userName, setUserName] = useState(() => localStorage.getItem('userName') || 'Bạn');
@@ -204,21 +300,17 @@ export default function Chat() {
   // Handle copy code button clicks
   useEffect(() => {
     const handleCopy = (e) => {
-      if (e.target.classList.contains('copy-code-btn')) {
-        const codeElement = e.target.previousSibling?.querySelector('code');
-        if (codeElement) {
-          navigator.clipboard.writeText(codeElement.textContent)
-            .then(() => {
-              const originalText = e.target.textContent;
-              e.target.textContent = 'Copied!';
-              e.target.disabled = true;
-              setTimeout(() => {
-                e.target.textContent = originalText;
-                e.target.disabled = false;
-              }, 2000);
-            })
-            .catch(err => console.error('Copy error:', err));
-        }
+      if (e.target.classList.contains('copy-btn')) {
+        const code = e.target.getAttribute('data-code');
+        navigator.clipboard.writeText(code)
+          .then(() => {
+            const originalHTML = e.target.innerHTML;
+            e.target.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+            setTimeout(() => {
+              e.target.innerHTML = originalHTML;
+            }, 2000);
+          })
+          .catch(err => console.error('Copy error:', err));
       }
     };
 
@@ -259,34 +351,7 @@ export default function Chat() {
       setMessages(selectedChat.messages.length > 0 ? selectedChat.messages : [messages[0]]);
       setCurrentChatId(id);
     }
-  }, [chatHistory]);
-
-  // Format timestamp
-  const formatTimestamp = useCallback((timestamp) => {
-    if (!timestamp) return '';
-    const date = new Date(timestamp);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(today.getDate() - 1);
-
-    if (date.toDateString() === today.toDateString()) {
-      return date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    } else if (date.toDateString() === yesterday.toDateString()) {
-      return 'Hôm qua ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-    }
-    return date.toLocaleDateString('vi-VN') + ' ' + date.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
-  }, []);
-
-  // Group chat history by date
-  const groupedHistory = useMemo(() => {
-    const groups = {};
-    chatHistory.forEach(chat => {
-      const date = new Date(chat.created_at || chat.timestamp).toDateString();
-      if (!groups[date]) groups[date] = [];
-      groups[date].push(chat);
-    });
-    return groups;
-  }, [chatHistory]);
+  }, [chatHistory, messages]);
 
   // Insert formatting
   const insertFormatting = useCallback((formatType) => {
@@ -472,7 +537,7 @@ export default function Chat() {
         signal: abortControllerRef.current.signal
       });
 
-      console.log('Image API Response:', data); // Log for debugging
+      console.log('Image API Response:', data);
 
       if (!data.imageUrl) {
         throw new Error('No image URL returned from API');
@@ -481,7 +546,7 @@ export default function Chat() {
       const aiMessage = {
         id: data.messageId || `ai-${Date.now()}`,
         role: 'ai',
-        content: data.message || `![Generated Image](${data.imageUrl || 'https://via.placeholder.com/1024?text=Image+Failed+to+Load'})`,
+        content: data.message || `![Generated Image](${data.imageUrl})`,
         timestamp: data.timestamp || new Date().toISOString()
       };
 
@@ -533,7 +598,7 @@ export default function Chat() {
       console.error('Delete chat error:', err);
       setError('Không thể xóa cuộc trò chuyện. Vui lòng thử lại.');
     }
-  }, [currentChatId]);
+  }, [currentChatId, messages]);
 
   // Delete message
   const deleteMessage = useCallback(async (messageId) => {
@@ -558,6 +623,7 @@ export default function Chat() {
     }]);
     setError(null);
     setInput('');
+    setSidebarOpen(false);
   }, []);
 
   // Toggle theme
@@ -585,175 +651,93 @@ export default function Chat() {
   const handleInputChange = useCallback((e) => {
     setInput(e.target.value);
     e.target.style.height = 'auto';
-    e.target.style.height = `${Math.min(e.target.scrollHeight, 192)}px`;
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   }, []);
 
-  return (
-    <div className={`min-h-screen flex ${theme === 'light' ? 'bg-gray-50' : 'bg-gray-900'} text-gray-900 dark:text-white transition-colors duration-300`}>
-      {/* Sidebar */}
-      <div className={`fixed inset-y-0 left-0 z-30 w-64 transform ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} transition-transform duration-300 ease-in-out md:relative md:translate-x-0 ${theme === 'light' ? 'bg-white border-r border-gray-200' : 'bg-gray-800 border-r border-gray-700'}`}>
-        <div className="flex h-full flex-col">
-          <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-            <h2 className="text-xl font-bold">Lịch sử chat</h2>
-            <button onClick={newChat} className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors">
-              <Plus className="w-5 h-5" />
-            </button>
-          </div>
-          <div className="p-4">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
-              <input
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Tìm kiếm chat..."
-                className={`w-full pl-10 pr-4 py-2 rounded-lg ${theme === 'light' ? 'bg-gray-100 border-gray-200 text-gray-900 placeholder-gray-500' : 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'} border focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors`}
-              />
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {Object.entries(groupedHistory).map(([date, chats]) => (
-              <div key={date}>
-                <h3 className="text-sm font-semibold mb-2 text-gray-500 dark:text-gray-400">
-                  {new Date(date).toLocaleDateString('vi-VN', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                </h3>
-                {chats.filter(chat => (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())).map(chat => (
-                  <div 
-                    key={chat.id}
-                    className={`p-3 rounded-lg cursor-pointer relative group ${currentChatId === chat.id ? 'bg-blue-100 dark:bg-blue-900/30' : ''} ${theme === 'light' ? 'hover:bg-gray-100' : 'hover:bg-gray-700'} transition-colors`}
-                    onClick={() => loadChat(chat.id)}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium truncate">{chat.title || 'Cuộc trò chuyện mới'}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 truncate">{chat.last_message || 'Không có tin nhắn'}</p>
-                      </div>
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteChat(chat.id);
-                        }}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-500/20"
-                      >
-                        <Trash2 className="w-4 h-4 text-red-500" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-          <div className="p-4 border-t border-gray-200 dark:border-gray-700 space-y-2">
-            <button 
-              onClick={() => navigate('/home')}
-              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'}`}
-            >
-              <Home className="w-5 h-5" />
-              Trang chủ
-            </button>
-            <button 
-              onClick={() => navigate('/settings')}
-              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'}`}
-            >
-              <Settings className="w-5 h-5" />
-              Cài đặt
-            </button>
-            <button 
-              onClick={toggleTheme}
-              className={`w-full flex items-center gap-3 p-3 rounded-lg transition-colors ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'}`}
-            >
-              {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
-              {theme === 'light' ? 'Chế độ tối' : 'Chế độ sáng'}
-            </button>
-          </div>
-        </div>
-      </div>
+  const filteredHistory = useMemo(() => 
+    chatHistory.filter(chat =>
+      (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())
+    ), [chatHistory, searchTerm]
+  );
 
-      {/* Main Content */}
+  const handleChatSelect = useCallback((chatId) => {
+    loadChat(chatId);
+    setSidebarOpen(false);
+  }, [loadChat]);
+
+  return (
+    <div className={`h-screen flex ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'} transition-colors duration-300`}>
+      <Sidebar
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+        theme={theme}
+        onThemeToggle={toggleTheme}
+        chatHistory={filteredHistory}
+        currentChatId={currentChatId}
+        onChatSelect={handleChatSelect}
+        onNewChat={newChat}
+        onDeleteChat={deleteChat}
+        searchTerm={searchTerm}
+        onSearchChange={setSearchTerm}
+      />
+
       <div className="flex-1 flex flex-col min-w-0">
-        <nav className="fixed top-0 left-0 right-0 z-20 bg-gradient-to-r from-sky-500/70 to-indigo-600/70 backdrop-blur-md border-b border-white/10 shadow-xl px-4 py-3 md:px-6 lg:px-8">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <button 
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-                className="p-2 rounded-lg hover:bg-white/10 transition-colors md:hidden"
-              >
-                <Menu className="w-5 h-5 text-white" />
-              </button>
-              <h1 className="text-xl font-bold text-white">Chat Với AI</h1>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-white/80 hidden sm:block">{userName}</span>
-              <button 
-                onClick={() => {
-                  localStorage.clear();
-                  navigate('/login');
-                }}
-                className="px-4 py-2 rounded-lg bg-red-500/70 hover:bg-red-600/70 text-white font-semibold transition-colors"
-              >
-                Đăng xuất
-              </button>
-            </div>
-          </div>
+        <nav className="lg:hidden flex items-center justify-between p-4 border-b border-gray-800 dark:border-gray-700 bg-gray-900 dark:bg-gray-900">
+          <button 
+            onClick={() => setSidebarOpen(true)}
+            className={`p-2 rounded-lg transition ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
+          >
+            <Menu className="w-6 h-6" />
+          </button>
+          <h1 className="font-bold text-lg bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">Hein AI</h1>
+          <button 
+            onClick={() => {
+              localStorage.clear();
+              navigate('/login');
+            }}
+            className="px-4 py-2 rounded-lg bg-red-500/70 hover:bg-red-600/70 text-white font-semibold transition-colors"
+          >
+            Đăng xuất
+          </button>
         </nav>
 
-        {/* Messages */}
-        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-6 space-y-6 pt-20 pb-32">
-          {error && (
-            <div className="p-4 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded-lg flex items-center justify-between">
-              <span>{error}</span>
-              <button onClick={() => setError(null)} className="ml-4 text-red-500 hover:text-red-700">
-                ✕
-              </button>
-            </div>
-          )}
-          {messages.map((msg) => (
-            <div 
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div className={`max-w-[70%] p-4 rounded-2xl relative group ${msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white'} shadow-sm`}>
-                <div className="flex items-center gap-3 mb-2">
-                  {msg.role === 'user' ? (
-                    <User className="w-5 h-5" />
-                  ) : (
-                    <Bot className="w-5 h-5 text-blue-500" />
-                  )}
-                  <span className="font-medium">{msg.role === 'user' ? userName : 'Hein AI'}</span>
-                </div>
-                <MessageContent content={msg.content} role={msg.role} />
-                <div className="flex justify-between items-center mt-2 text-xs opacity-70">
-                  <span>{formatTimestamp(msg.timestamp)}</span>
-                  {msg.role === 'user' && msg.id !== 'welcome' && (
-                    <button 
-                      onClick={() => deleteMessage(msg.id)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-red-500/20"
-                    >
-                      <Trash2 className="w-4 h-4 text-red-500" />
-                    </button>
-                  )}
-                </div>
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto px-4 py-6 lg:px-8">
+          <div className="max-w-4xl mx-auto">
+            {error && (
+              <div className={`p-4 rounded-2xl mb-6 flex items-center justify-between ${theme === 'dark' ? 'bg-red-900/30 text-red-300' : 'bg-red-100 text-red-700'}`}>
+                <span>{error}</span>
+                <button onClick={() => setError(null)} className="ml-4 text-red-500 hover:text-red-700">
+                  <X className="w-4 h-4" />
+                </button>
               </div>
-            </div>
-          ))}
-          {isLoading && (
-            <div className="flex justify-start">
-              <div className="max-w-[70%] p-4 rounded-2xl bg-gray-100 dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm">
-                <div className="flex items-center gap-3">
-                  <Bot className="w-5 h-5 text-blue-500" />
+            )}
+            {messages.map(msg => (
+              <MessageBubble 
+                key={msg.id} 
+                msg={msg} 
+                userName={userName}
+                onDelete={deleteMessage}
+                theme={theme}
+              />
+            ))}
+            {isLoading && (
+              <div className="flex gap-3 mb-6">
+                <div className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center bg-gradient-to-br from-purple-500 to-pink-500 shadow-lg">
+                  <Bot className="w-5 h-5 text-white" />
+                </div>
+                <div className={`px-4 py-3 rounded-2xl rounded-tl-md shadow-md ${theme === 'dark' ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-900'}`}>
                   <div className="flex items-center gap-2">
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    <span>Đang xử lý...</span>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span className="text-sm">Đang xử lý...</span>
                   </div>
                 </div>
               </div>
-            </div>
-          )}
-          <div ref={messagesEndRef} />
+            )}
+            <div ref={messagesEndRef} />
+          </div>
         </div>
 
-        {/* Input Area */}
-        <div className={`fixed bottom-0 left-0 right-0 p-6 border-t ${theme === 'light' ? 'border-gray-200 bg-white' : 'border-gray-700 bg-gray-800'} z-10 md:static md:border-0 md:p-6`}>
+        <div className={`border-t ${theme === 'dark' ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-white'} p-4 lg:p-6`}>
           <div className="max-w-4xl mx-auto">
             <div className="relative">
               <textarea
@@ -762,40 +746,42 @@ export default function Chat() {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Nhập tin nhắn của bạn..."
-                className={`w-full p-4 pr-32 rounded-xl border-2 resize-none focus:outline-none focus:ring-2 focus:border-transparent transition-all duration-200 ${theme === 'light' ? 'bg-gray-50 border-gray-200 text-gray-900 placeholder-gray-500' : 'bg-gray-700 border-gray-600 text-white placeholder-gray-400'} shadow-sm focus:ring-blue-500 min-h-[3rem] max-h-48`}
+                className={`w-full px-4 py-3.5 pr-40 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500' : 'bg-gray-100 text-gray-900 placeholder-gray-400'} border-0 min-h-[3rem] max-h-[12rem]`}
                 disabled={isLoading}
                 rows={1}
               />
+              
               {!isLoading && input.trim() && (
-                <div className="absolute right-24 top-3 flex gap-1">
+                <div className="absolute right-44 top-4 flex gap-1">
                   <button
                     onClick={() => insertFormatting('bold')}
-                    className={`p-1.5 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
+                    className={`p-1.5 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
                     title="Bold (Ctrl+B)"
                   >
                     <Bold className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => insertFormatting('italic')}
-                    className={`p-1.5 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
+                    className={`p-1.5 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
                     title="Italic (Ctrl+I)"
                   >
                     <Italic className="w-3.5 h-3.5" />
                   </button>
                   <button
                     onClick={() => insertFormatting('code')}
-                    className={`p-1.5 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
+                    className={`p-1.5 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
                     title="Code (Ctrl+`)"
                   >
                     <Code className="w-3.5 h-3.5" />
                   </button>
                 </div>
               )}
-              <div className="absolute right-3 top-3 flex gap-2" ref={dropdownRef}>
+              
+              <div className="absolute right-2 bottom-2 flex items-center gap-1" ref={dropdownRef}>
                 {isLoading && (
                   <button
                     onClick={stopGeneration}
-                    className="p-2 rounded-lg bg-red-500 hover:bg-red-600 text-white transition-all duration-200"
+                    className="p-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-all"
                     title="Dừng"
                   >
                     <StopCircle className="w-5 h-5" />
@@ -805,17 +791,17 @@ export default function Chat() {
                   <div className="relative">
                     <button
                       onClick={() => setShowActionDropdown(!showActionDropdown)}
-                      className={`p-2 rounded-lg ${theme === 'light' ? 'hover:bg-gray-200 text-gray-700' : 'hover:bg-gray-600 text-gray-300'} transition-colors`}
+                      className={`p-2 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
                       title="Thêm tùy chọn"
                     >
                       <ChevronDown className="w-4 h-4" />
                     </button>
                     {showActionDropdown && (
-                      <div className={`absolute right-0 bottom-full mb-2 w-48 ${theme === 'light' ? 'bg-white border-gray-200' : 'bg-gray-700 border-gray-600'} rounded-lg shadow-lg border py-2 z-10`}>
+                      <div className={`absolute right-0 bottom-full mb-2 w-48 ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'} rounded-xl shadow-lg border py-2 z-10`}>
                         <button
                           onClick={handleWebSearch}
                           disabled={isLoading || !input.trim()}
-                          className={`w-full flex items-center gap-3 px-4 py-2 text-left ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'} ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed' : ''} transition-colors`}
+                          className={`w-full flex items-center gap-3 px-4 py-2 text-left ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed' : ''} transition-colors`}
                         >
                           <Globe className="w-4 h-4" />
                           Tìm kiếm web
@@ -823,7 +809,7 @@ export default function Chat() {
                         <button
                           onClick={handleGenerateImage}
                           disabled={isLoading || !input.trim()}
-                          className={`w-full flex items-center gap-3 px-4 py-2 text-left ${theme === 'light' ? 'hover:bg-gray-100 text-gray-900' : 'hover:bg-gray-600 text-white'} ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed' : ''} transition-colors`}
+                          className={`w-full flex items-center gap-3 px-4 py-2 text-left ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed' : ''} transition-colors`}
                         >
                           <Image className="w-4 h-4" />
                           Tạo ảnh
@@ -832,31 +818,31 @@ export default function Chat() {
                     )}
                   </div>
                 )}
+                <button 
+                  className={`p-2 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-200'} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Ghi âm"
+                  disabled={isLoading}
+                >
+                  <Mic className="w-5 h-5 text-gray-400" />
+                </button>
                 <button
                   onClick={handleSendMessage}
                   disabled={isLoading || !input.trim()}
-                  className={`p-2 rounded-lg transition-all duration-200 ${theme === 'light' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-blue-600 hover:bg-blue-700'} text-white shadow-md ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed scale-95' : 'hover:scale-105'}`}
+                  className={`p-2.5 rounded-xl transition-all ${input.trim() ? (theme === 'dark' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600') : 'bg-gray-700 text-gray-500 cursor-not-allowed'} text-white shadow-lg hover:shadow-xl transform hover:scale-105`}
                   title="Gửi (Enter)"
                 >
                   {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
                 </button>
               </div>
             </div>
-            <div className="flex justify-between items-center mt-2 text-xs text-gray-500">
-              <span>Enter để gửi, Shift+Enter để xuống dòng</span>
-              <span className="text-right">Ctrl+B/I/` để định dạng | {input.length}/500</span>
+            
+            <div className="flex items-center justify-between mt-2 text-xs text-gray-400 px-2">
+              <span>Enter để gửi • Shift+Enter để xuống dòng</span>
+              <span className={input.length > 450 ? 'text-red-500 font-medium' : ''}>{input.length}/500</span>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Mobile sidebar overlay */}
-      {sidebarOpen && (
-        <div 
-          className="fixed inset-0 bg-black/50 z-20 md:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
     </div>
   );
 }
