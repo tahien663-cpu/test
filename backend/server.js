@@ -956,22 +956,22 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
-// Catch-all handler for SPA routing with redirect on 404
+// Catch-all handler for SPA routing
 app.get('*', (req, res) => {
+  // Skip API routes
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API endpoint not found', code: 'NOT_FOUND' });
+  }
+  
   const indexPath = path.join(__dirname, 'test', 'frontend', 'dist', 'index.html');
-  console.log(`Serving or redirecting ${req.originalUrl} to ${indexPath}`);
+  console.log(`Serving SPA for ${req.originalUrl}`);
+  
   res.sendFile(indexPath, (err) => {
     if (err) {
       console.error(`Error serving index.html: ${err.message}`);
-      res.redirect(301, '/');
+      res.status(500).json({ error: 'Failed to serve application', code: 'SERVE_ERROR' });
     }
   });
-});
-
-// 404 handler with redirect
-app.use('*', (req, res) => {
-  console.warn(`Route not found: ${req.method} ${req.originalUrl}`);
-  res.redirect(301, '/');
 });
 
 // Error handling middleware
