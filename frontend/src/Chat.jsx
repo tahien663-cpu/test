@@ -403,13 +403,11 @@ export default function Chat() {
 
   // Handle keydown
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
       e.preventDefault();
-      if (!isLoading && input.trim()) {
-        handleSendMessage();
-      }
+      handleSendMessage();
     }
-  }, [isLoading, input, handleSendMessage]);
+  }, [isLoading]);
 
   // Stop generation
   const stopGeneration = useCallback(() => {
