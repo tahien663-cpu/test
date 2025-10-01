@@ -1,34 +1,12 @@
 
-import { useState, useEffect, useRef, useCallback, useMemo, forwardRef } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, MessageSquare, X, 
-  Image, Globe, Mic, StopCircle, Home
+  Image, Globe, Mic, StopCircle, Home, DownloadCloud
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
-
-// Custom DownloadIcon component
-const DownloadIcon = forwardRef(({ className, size = 24, strokeWidth = 2, ...props }, ref) => (
-  <svg
-    ref={ref}
-    xmlns="http://www.w3.org/2000/svg"
-    width={size}
-    height={size}
-    viewBox="0 0 24 24"
-    fill="none"
-    stroke="currentColor"
-    strokeWidth={strokeWidth}
-    strokeLinecap="round"
-    strokeLinejoin="round"
-    className={className}
-    {...props}
-  >
-    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-    <polyline points="7 10 12 15 17 10" />
-    <line x1="12" y1="15" x2="12" y2="3" />
-  </svg>
-));
 
 // CSS để ẩn scrollbar
 const hideScrollbarStyle = document.createElement('style');
@@ -169,10 +147,10 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
     imageDivs.forEach(div => {
       if (!div.querySelector('.download-btn')) {
         const button = document.createElement('button');
-        button.className = `download-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all`;
+        button.className = `download-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all text-gray-600 dark:text-gray-300`;
         button.setAttribute('aria-label', 'Download image');
         button.setAttribute('title', 'Tải ảnh xuống');
-        button.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg>`;
+        button.innerHTML = `<svg class="w-4 h-4" data-icon="download-cloud"><use href="#lucide-download-cloud"></use></svg>`;
         div.appendChild(button);
       }
     });
