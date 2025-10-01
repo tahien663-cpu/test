@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, forwardRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, MessageSquare, X, 
@@ -6,6 +6,28 @@ import {
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
+
+// Custom UploadIcon component
+const UploadIcon = forwardRef(({ className, size = 24, strokeWidth = 2, ...props }, ref) => (
+  <svg
+    ref={ref}
+    xmlns="http://www.w3.org/2000/svg"
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth={strokeWidth}
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    {...props}
+  >
+    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+    <polyline points="17 8 12 3 7 8" />
+    <line x1="12" y1="3" x2="12" y2="15" />
+  </svg>
+));
 
 // CSS để ẩn scrollbar
 const hideScrollbarStyle = document.createElement('style');
@@ -588,6 +610,95 @@ export default function Chat() {
     }
   }, [input, isLoading, currentChatId, loadChatHistory, navigate]);
 
+  // Handle image upload
+  const handleImageUpload = useCallback(async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    // Validate file type and size
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/gif'];
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    if (!allowedTypes.includes(file.type)) {
+      setError('Chỉ hỗ trợ định dạng PNG, JPEG, hoặc GIF.');
+      return;
+    }
+    if (file.size > maxSize) {
+      setError('Kích thước file tối đa là 5MB.');
+      return;
+    }
+
+    const userMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      content: `Đã tải lên ảnh: ${file.name}`,
+      timestamp: new Date().toISOString(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      abortControllerRef.current = new AbortController();
+      const formData = new FormData();
+      formData.append('image', file);
+      formData.append('chatId', currentChatId || '');
+
+      const data = await apiService.request('/upload-image', {
+        method: 'POST',
+        body: formData,
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!data.imageUrl) {
+        throw new Error('No image URL returned from API');
+      }
+
+      const aiMessage = {
+        id: data.messageId || `ai-${Date.now()}`,
+        role: 'ai',
+        content: `![Uploaded Image](${data.imageUrl})`,
+        timestamp: data.timestamp || new Date().toISOString(),
+      };
+
+      setMessages((prev) => [...prev, aiMessage]);
+
+      if (data.chatId && !currentChatId) {
+        setCurrentChatId(data.chatId);
+      }
+
+      await loadChatHistory();
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Image upload error:', err);
+        const errorMsg =
+          err.message.includes('401') || err.message.includes('403')
+            ? 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.'
+            : `Không thể tải ảnh lên: ${err.message}`;
+
+        setError(errorMsg);
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `error-${Date.now()}`,
+            role: 'ai',
+            content: `**Lỗi**: ${errorMsg}`,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+
+        if (err.message.includes('401') || err.message.includes('403')) {
+          localStorage.clear();
+          navigate('/login');
+        }
+      }
+    } finally {
+      setIsLoading(false);
+      abortControllerRef.current = null;
+      e.target.value = ''; // Reset file input
+    }
+  }, [currentChatId, loadChatHistory, navigate]);
+
   // Delete chat
   const deleteChat = useCallback(async (id) => {
     if (!window.confirm('Bạn có chắc muốn xóa cuộc trò chuyện này?')) return;
@@ -785,7 +896,7 @@ export default function Chat() {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Nhập tin nhắn của bạn..."
-                className={`w-full px-4 py-3.5 pr-32 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
+                className={`w-full px-4 py-3.5 pr-40 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
                   theme === 'dark' 
                     ? 'bg-gray-800 text-white placeholder-gray-500 border border-gray-700' 
                     : 'bg-gray-100 text-gray-900 placeholder-gray-400 border border-gray-300'
@@ -795,6 +906,26 @@ export default function Chat() {
               />
               
               <div className="absolute right-2 bottom-2 flex items-center gap-1">
+                <input
+                  type="file"
+                  id="image-upload"
+                  accept="image/png,image/jpeg,image/gif"
+                  onChange={handleImageUpload}
+                  className="hidden"
+                  disabled={isLoading}
+                />
+                <label
+                  htmlFor="image-upload"
+                  aria-label="Upload an image"
+                  className={`p-2 rounded-xl transition-colors ${
+                    theme === 'dark' 
+                      ? 'hover:bg-gray-700 text-gray-300 hover:text-white' 
+                      : 'hover:bg-gray-200 text-gray-600 hover:text-gray-900'
+                  } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Tải ảnh lên"
+                >
+                  <UploadIcon className="w-5 h-5" />
+                </label>
                 <button 
                   onClick={handleWebSearch}
                   className={`p-2 rounded-xl transition-colors ${
