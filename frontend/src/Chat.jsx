@@ -216,7 +216,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                     : 'hover:bg-gray-200 text-gray-900'
                 }`}
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5 text-gray-900 dark:text-white" />
               </button>
             </div>
             
@@ -281,7 +281,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                   : 'hover:bg-gray-100 text-gray-900'
               }`}
             >
-              <Home className="w-5 h-5" />
+              <Home className="w-5 h-5 text-gray-900 dark:text-white" />
               <span className="text-sm">Trang chủ</span>
             </button>
             <button 
@@ -292,7 +292,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                   : 'hover:bg-gray-100 text-gray-900'
               }`}
             >
-              <Settings className="w-5 h-5" />
+              <Settings className="w-5 h-5 text-gray-900 dark:text-white" />
               <span className="text-sm">Cài đặt</span>
             </button>
             <button 
@@ -303,7 +303,11 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                   : 'hover:bg-gray-100 text-gray-900'
               }`}
             >
-              {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
+              {theme === 'dark' ? (
+                <Sun className="w-5 h-5 text-gray-900 dark:text-white" />
+              ) : (
+                <Moon className="w-5 h-5 text-gray-900 dark:text-white" />
+              )}
               <span className="text-sm">{theme === 'dark' ? 'Chế độ sáng' : 'Chế độ tối'}</span>
             </button>
           </div>
@@ -333,10 +337,7 @@ export default function Chat() {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [theme, setTheme] = useState(() => {
-    const savedTheme = localStorage.getItem('theme');
-    return savedTheme || 'dark';
-  });
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'light');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentChatId, setCurrentChatId] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -351,12 +352,7 @@ export default function Chat() {
 
   // Apply theme on mount and change
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('theme', theme);
   }, [theme]);
 
@@ -368,6 +364,30 @@ export default function Chat() {
       }
     };
   }, []);
+
+  // Handle copy code button clicks
+  useEffect(() => {
+    const handleCopy = (e) => {
+      if (e.target.classList.contains('copy-btn')) {
+        const code = e.target.getAttribute('data-code');
+        navigator.clipboard.writeText(code)
+          .then(() => {
+            const originalHTML = e.target.innerHTML;
+            e.target.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+            setTimeout(() => {
+              e.target.innerHTML = originalHTML;
+            }, 2000);
+          })
+          .catch(err => console.error('Copy error:', err));
+      }
+    };
+
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.addEventListener('click', handleCopy);
+      return () => container.removeEventListener('click', handleCopy);
+    }
+  }, [messages]);
 
   // Load chat history
   const loadChatHistory = useCallback(async () => {
@@ -403,13 +423,11 @@ export default function Chat() {
 
   // Handle keydown
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
       e.preventDefault();
-      if (!isLoading && input.trim()) {
-        handleSendMessage();
-      }
+      handleSendMessage();
     }
-  }, [isLoading, input, handleSendMessage]);
+  }, [isLoading, handleSendMessage]);
 
   // Stop generation
   const stopGeneration = useCallback(() => {
@@ -687,10 +705,10 @@ export default function Chat() {
             className={`p-2 rounded-lg transition ${
               theme === 'dark' 
                 ? 'hover:bg-gray-800 text-white' 
-                : 'hover:bg-gray-100 text-gray-900'
+                : 'hover:bg-gray-200 text-gray-900'
             }`}
           >
-            <Menu className="w-6 h-6" />
+            <Menu className="w-6 h-6 text-gray-900 dark:text-white" />
           </button>
           <h1 className="font-bold text-lg bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">
             Hein AI
@@ -726,7 +744,7 @@ export default function Chat() {
                     theme === 'dark' ? 'text-red-400 hover:text-red-300' : 'text-red-500 hover:text-red-700'
                   }`}
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-4 h-4 text-gray-900 dark:text-white" />
                 </button>
               </div>
             )}
@@ -750,7 +768,7 @@ export default function Chat() {
                     : 'bg-gray-100 text-gray-900 border border-gray-200'
                 }`}>
                   <div className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <Loader2 className="w-4 h-4 animate-spin text-gray-900 dark:text-white" />
                     <span className="text-sm">Đang xử lý...</span>
                   </div>
                 </div>
@@ -793,7 +811,7 @@ export default function Chat() {
                   title="Tìm kiếm web"
                   disabled={isLoading || !input.trim()}
                 >
-                  <Globe className="w-5 h-5" />
+                  <Globe className="w-5 h-5 text-gray-900 dark:text-white" />
                 </button>
                 <button 
                   onClick={handleGenerateImage}
@@ -805,7 +823,7 @@ export default function Chat() {
                   title="Tạo ảnh"
                   disabled={isLoading || !input.trim()}
                 >
-                  <Image className="w-5 h-5" />
+                  <Image className="w-5 h-5 text-gray-900 dark:text-white" />
                 </button>
                 <button 
                   className={`p-2 rounded-xl transition-colors ${
@@ -816,7 +834,7 @@ export default function Chat() {
                   title="Ghi âm"
                   disabled={isLoading}
                 >
-                  <Mic className="w-5 h-5" />
+                  <Mic className="w-5 h-5 text-gray-900 dark:text-white" />
                 </button>
                 {isLoading ? (
                   <button
@@ -824,7 +842,7 @@ export default function Chat() {
                     className="p-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-all shadow-lg"
                     title="Dừng"
                   >
-                    <StopCircle className="w-5 h-5" />
+                    <StopCircle className="w-5 h-5 text-white" />
                   </button>
                 ) : (
                   <button
@@ -839,7 +857,7 @@ export default function Chat() {
                     }`}
                     title="Gửi (Enter)"
                   >
-                    <Send className="w-5 h-5" />
+                    <Send className="w-5 h-5 text-white" />
                   </button>
                 )}
               </div>
