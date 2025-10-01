@@ -35,7 +35,9 @@ const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
 // Serve static files from the Vite build output (dist folder)
-app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist')));
+app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), {
+  maxAge: '1d' // Cache 1 ngày
+}));
 
 // Enable trust proxy for Render
 app.set('trust proxy', 1);
@@ -568,7 +570,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
     } else {
       // Regular AI response
-      // Map messages for OpenRouter
       const mappedMessages = messages.map(m => ({
         role: m.role === 'ai' ? 'assistant' : m.role,
         content: sanitizeInput(m.content)
@@ -955,26 +956,28 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
   }
 });
 
-// Catch-all handler for SPA routing (fixes refresh 404)
+// Catch-all handler for SPA routing with redirect on 404
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'test', 'frontend', 'dist', 'index.html'));
+  const indexPath = path.join(__dirname, 'test', 'frontend', 'dist', 'index.html');
+  console.log(`Serving or redirecting ${req.originalUrl} to ${indexPath}`);
+  res.sendFile(indexPath, (err) => {
+    if (err) {
+      console.error(`Error serving index.html: ${err.message}`);
+      res.redirect(301, '/');
+    }
+  });
 });
 
-// 404 handler
+// 404 handler with redirect
 app.use('*', (req, res) => {
   console.warn(`Route not found: ${req.method} ${req.originalUrl}`);
-  res.status(404).json({
-    error: 'Endpoint not found',
-    code: 'ENDPOINT_NOT_FOUND',
-    path: req.originalUrl
-  });
+  res.redirect(301, '/');
 });
 
 // Error handling middleware
 app.use((err, req, res, next) => {
   console.error(`Unhandled error: ${err.message}, stack: ${err.stack}`);
   
-  // Handle CORS errors
   if (err.message === 'Not allowed by CORS') {
     return res.status(403).json({
       error: 'CORS error',
