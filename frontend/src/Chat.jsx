@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Send, Bot, User, Loader2, Menu, Plus, Search, Settings, Moon, Sun, Trash2, MessageSquare, X, 
-  Image, Globe, Mic, StopCircle, Bold, Italic, Code, ChevronDown
+  Image, Globe, Mic, StopCircle, Home
 } from 'lucide-react';
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
@@ -19,9 +19,9 @@ const parseMarkdown = (text) => {
       .replace(/>/g, '&gt;')
       .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
         const langClass = lang ? ` language-${lang}` : '';
-        return `<div class="my-3 relative group"><pre class="bg-gray-800 dark:bg-gray-950 p-4 rounded-xl overflow-x-auto text-sm"><code class="${langClass} text-gray-100">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition-all" data-code="${code.trim().replace(/"/g, '&quot;')}"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg></button></div>`;
+        return `<div class="my-3 relative group"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-xl overflow-x-auto text-sm"><code class="${langClass} text-gray-900 dark:text-gray-100">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all" data-code="${code.trim().replace(/"/g, '&quot;')}"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg></button></div>`;
       })
-      .replace(/`([^`]+)`/g, '<code class="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-sm font-mono">$1</code>')
+      .replace(/`([^`]+)`/g, '<code class="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-sm font-mono text-gray-900 dark:text-gray-100">$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong class="font-bold">$1</strong>')
       .replace(/__(.*?)__/g, '<strong class="font-bold">$1</strong>')
       .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
@@ -33,10 +33,10 @@ const parseMarkdown = (text) => {
       .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
         const tag = `h${level.length}`;
         const size = 7 - level.length;
-        return `<${tag} class="font-bold mt-4 mb-2 text-${size}xl">${content}</${tag}>`;
+        return `<${tag} class="font-bold mt-4 mb-2 text-${size}xl text-gray-900 dark:text-white">${content}</${tag}>`;
       })
-      .replace(/^[-*]\s+(.*)$/gm, '<li class="ml-4 list-disc">$1</li>')
-      .replace(/^\d+\.\s+(.*)$/gm, '<li class="ml-4 list-decimal">$1</li>');
+      .replace(/^[-*]\s+(.*)$/gm, '<li class="ml-4 list-disc text-gray-900 dark:text-white">$1</li>')
+      .replace(/^\d+\.\s+(.*)$/gm, '<li class="ml-4 list-decimal text-gray-900 dark:text-white">$1</li>');
 
     return DOMPurify.sanitize(html, { 
       ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button', 'img'],
@@ -133,7 +133,7 @@ const ChatHistoryItem = ({ chat, isActive, onClick, onDelete, theme }) => (
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-1">
           <MessageSquare className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-blue-500' : 'text-gray-400'}`} />
-          <p className={`font-medium text-sm truncate ${isActive ? 'text-blue-500' : ''}`}>{chat.title || 'Cuộc trò chuyện mới'}</p>
+          <p className={`font-medium text-sm truncate ${isActive ? 'text-blue-500' : 'text-gray-900 dark:text-white'}`}>{chat.title || 'Cuộc trò chuyện mới'}</p>
         </div>
         <p className="text-xs text-gray-400 truncate pl-6">{chat.last_message || 'Không có tin nhắn'}</p>
       </div>
@@ -150,7 +150,7 @@ const ChatHistoryItem = ({ chat, isActive, onClick, onDelete, theme }) => (
   </div>
 );
 
-const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentChatId, onChatSelect, onNewChat, onDeleteChat, searchTerm, onSearchChange }) => {
+const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentChatId, onChatSelect, onNewChat, onDeleteChat, searchTerm, onSearchChange, onHome }) => {
   const groupedChats = useMemo(() => {
     const groups = {};
     chatHistory.forEach(chat => {
@@ -165,7 +165,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
     <>
       <div className={`fixed inset-y-0 left-0 z-50 w-80 transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'} lg:relative lg:translate-x-0 ${theme === 'dark' ? 'bg-gray-950 border-r border-gray-800' : 'bg-gray-50 border-r border-gray-200'}`}>
         <div className="h-full flex flex-col">
-          <div className="p-4 border-b border-gray-800 dark:border-gray-700">
+          <div className="p-4 border-b ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'}">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg">
@@ -175,7 +175,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
               </div>
               <button 
                 onClick={onClose}
-                className="lg:hidden p-2 hover:bg-gray-800 dark:hover:bg-gray-700 rounded-lg transition"
+                className="lg:hidden p-2 ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'} rounded-lg transition"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -198,7 +198,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                 value={searchTerm}
                 onChange={(e) => onSearchChange(e.target.value)}
                 placeholder="Tìm kiếm..."
-                className={`w-full pl-10 pr-4 py-2.5 rounded-xl ${theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500' : 'bg-white text-gray-900 placeholder-gray-400'} border border-gray-700 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500 transition`}
+                className={`w-full pl-10 pr-4 py-2.5 rounded-xl ${theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500 border border-gray-700' : 'bg-white text-gray-900 placeholder-gray-400 border border-gray-200'} focus:outline-none focus:ring-2 focus:ring-blue-500 transition`}
               />
             </div>
           </div>
@@ -223,14 +223,24 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
             ))}
           </div>
 
-          <div className="p-4 border-t border-gray-800 dark:border-gray-700 space-y-1">
-            <button className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}>
+          <div className="p-4 border-t ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'} space-y-1">
+            <button 
+              onClick={onHome}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800 text-white' : 'hover:bg-gray-200 text-gray-900'}`}
+            >
+              <Home className="w-5 h-5" />
+              <span className="text-sm">Trang chủ</span>
+            </button>
+            <button 
+              onClick={() => navigate('/settings')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800 text-white' : 'hover:bg-gray-200 text-gray-900'}`}
+            >
               <Settings className="w-5 h-5" />
               <span className="text-sm">Cài đặt</span>
             </button>
             <button 
               onClick={onThemeToggle}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800 text-white' : 'hover:bg-gray-200 text-gray-900'}`}
             >
               {theme === 'dark' ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               <span className="text-sm">{theme === 'dark' ? 'Chế độ sáng' : 'Chế độ tối'}</span>
@@ -268,12 +278,10 @@ export default function Chat() {
   const [searchTerm, setSearchTerm] = useState('');
   const [userName, setUserName] = useState(() => localStorage.getItem('userName') || 'Bạn');
   const [chatHistory, setChatHistory] = useState([]);
-  const [showActionDropdown, setShowActionDropdown] = useState(false);
   const [error, setError] = useState(null);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const abortControllerRef = useRef(null);
-  const dropdownRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const isLoadingHistoryRef = useRef(false);
 
@@ -284,17 +292,6 @@ export default function Chat() {
         abortControllerRef.current.abort();
       }
     };
-  }, []);
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-        setShowActionDropdown(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   // Handle copy code button clicks
@@ -353,63 +350,13 @@ export default function Chat() {
     }
   }, [chatHistory, messages]);
 
-  // Insert formatting
-  const insertFormatting = useCallback((formatType) => {
-    const textarea = inputRef.current;
-    if (!textarea) return;
-
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    const selectedText = input.substring(start, end);
-    let newText, newCursorPos;
-
-    switch (formatType) {
-      case 'bold':
-        newText = `**${selectedText || 'text'}**`;
-        newCursorPos = start + 2 + (selectedText ? selectedText.length : 4);
-        break;
-      case 'italic':
-        newText = `_${selectedText || 'text'}_`;
-        newCursorPos = start + 1 + (selectedText ? selectedText.length : 4);
-        break;
-      case 'code':
-        newText = `\`${selectedText || 'code'}\``;
-        newCursorPos = start + 1 + (selectedText ? selectedText.length : 4);
-        break;
-      default:
-        return;
-    }
-
-    setInput(input.substring(0, start) + newText + input.substring(end));
-    setTimeout(() => {
-      textarea.focus();
-      textarea.setSelectionRange(newCursorPos, newCursorPos);
-    }, 0);
-  }, [input]);
-
   // Handle keydown
   const handleKeyDown = useCallback((e) => {
-    if (e.ctrlKey || e.metaKey) {
-      switch (e.key.toLowerCase()) {
-        case 'b':
-          e.preventDefault();
-          insertFormatting('bold');
-          break;
-        case 'i':
-          e.preventDefault();
-          insertFormatting('italic');
-          break;
-        case '`':
-          e.preventDefault();
-          insertFormatting('code');
-          break;
-      }
-    }
     if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
       e.preventDefault();
       handleSendMessage();
     }
-  }, [isLoading, insertFormatting]);
+  }, [isLoading]);
 
   // Stop generation
   const stopGeneration = useCallback(() => {
@@ -439,7 +386,6 @@ export default function Chat() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    setShowActionDropdown(false);
     setError(null);
 
     try {
@@ -499,7 +445,6 @@ export default function Chat() {
   // Handle web search
   const handleWebSearch = useCallback(async () => {
     if (!input.trim() || isLoading) return;
-    setShowActionDropdown(false);
     const searchInput = `Tìm kiếm web: ${input}`;
     setInput(searchInput);
     setTimeout(() => handleSendMessage(), 100);
@@ -513,8 +458,6 @@ export default function Chat() {
       setError('Prompt quá dài (tối đa 500 ký tự)');
       return;
     }
-
-    setShowActionDropdown(false);
 
     const userMessage = {
       id: `user-${Date.now()}`,
@@ -633,6 +576,12 @@ export default function Chat() {
     localStorage.setItem('theme', newTheme);
   }, [theme]);
 
+  // Handle home
+  const handleHome = useCallback(() => {
+    navigate('/home');
+    setSidebarOpen(false);
+  }, [navigate]);
+
   // Scroll to bottom
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -666,7 +615,7 @@ export default function Chat() {
   }, [loadChat]);
 
   return (
-    <div className={`h-screen flex ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'} transition-colors duration-300`}>
+    <div className={`h-screen flex ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'} text-gray-900 dark:text-white transition-colors duration-300`}>
       <Sidebar
         isOpen={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
@@ -679,10 +628,11 @@ export default function Chat() {
         onDeleteChat={deleteChat}
         searchTerm={searchTerm}
         onSearchChange={setSearchTerm}
+        onHome={handleHome}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <nav className="lg:hidden flex items-center justify-between p-4 border-b border-gray-800 dark:border-gray-700 bg-gray-900 dark:bg-gray-900">
+        <nav className="lg:hidden flex items-center justify-between p-4 border-b ${theme === 'dark' ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-white'}">
           <button 
             onClick={() => setSidebarOpen(true)}
             className={`p-2 rounded-lg transition ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
@@ -746,39 +696,36 @@ export default function Chat() {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Nhập tin nhắn của bạn..."
-                className={`w-full px-4 py-3.5 pr-40 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500' : 'bg-gray-100 text-gray-900 placeholder-gray-400'} border-0 min-h-[3rem] max-h-[12rem]`}
+                className={`w-full px-4 py-3.5 pr-32 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${theme === 'dark' ? 'bg-gray-800 text-white placeholder-gray-500' : 'bg-gray-100 text-gray-900 placeholder-gray-400'} border-0 min-h-[3rem] max-h-[12rem]`}
                 disabled={isLoading}
                 rows={1}
               />
               
-              {!isLoading && input.trim() && (
-                <div className="absolute right-44 top-4 flex gap-1">
-                  <button
-                    onClick={() => insertFormatting('bold')}
-                    className={`p-1.5 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
-                    title="Bold (Ctrl+B)"
-                  >
-                    <Bold className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => insertFormatting('italic')}
-                    className={`p-1.5 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
-                    title="Italic (Ctrl+I)"
-                  >
-                    <Italic className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    onClick={() => insertFormatting('code')}
-                    className={`p-1.5 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
-                    title="Code (Ctrl+`)"
-                  >
-                    <Code className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              )}
-              
-              <div className="absolute right-2 bottom-2 flex items-center gap-1" ref={dropdownRef}>
-                {isLoading && (
+              <div className="absolute right-2 bottom-2 flex items-center gap-1">
+                <button 
+                  onClick={handleWebSearch}
+                  className={`p-2 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Tìm kiếm web"
+                  disabled={isLoading || !input.trim()}
+                >
+                  <Globe className="w-5 h-5" />
+                </button>
+                <button 
+                  onClick={handleGenerateImage}
+                  className={`p-2 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Tạo ảnh"
+                  disabled={isLoading || !input.trim()}
+                >
+                  <Image className="w-5 h-5" />
+                </button>
+                <button 
+                  className={`p-2 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  title="Ghi âm"
+                  disabled={isLoading}
+                >
+                  <Mic className="w-5 h-5" />
+                </button>
+                {isLoading ? (
                   <button
                     onClick={stopGeneration}
                     className="p-2.5 rounded-xl bg-red-500 hover:bg-red-600 text-white transition-all"
@@ -786,53 +733,16 @@ export default function Chat() {
                   >
                     <StopCircle className="w-5 h-5" />
                   </button>
+                ) : (
+                  <button
+                    onClick={handleSendMessage}
+                    disabled={!input.trim()}
+                    className={`p-2.5 rounded-xl transition-all ${input.trim() ? 'bg-blue-500 hover:bg-blue-600 text-white shadow-lg hover:shadow-xl transform hover:scale-105' : 'bg-gray-300 dark:bg-gray-700 text-gray-500 cursor-not-allowed'}`}
+                    title="Gửi (Enter)"
+                  >
+                    <Send className="w-5 h-5" />
+                  </button>
                 )}
-                {!isLoading && input.trim() && (
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowActionDropdown(!showActionDropdown)}
-                      className={`p-2 rounded-lg ${theme === 'dark' ? 'hover:bg-gray-700 text-gray-300' : 'hover:bg-gray-200 text-gray-700'} transition-colors`}
-                      title="Thêm tùy chọn"
-                    >
-                      <ChevronDown className="w-4 h-4" />
-                    </button>
-                    {showActionDropdown && (
-                      <div className={`absolute right-0 bottom-full mb-2 w-48 ${theme === 'dark' ? 'bg-gray-800 border-gray-600' : 'bg-white border-gray-200'} rounded-xl shadow-lg border py-2 z-10`}>
-                        <button
-                          onClick={handleWebSearch}
-                          disabled={isLoading || !input.trim()}
-                          className={`w-full flex items-center gap-3 px-4 py-2 text-left ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed' : ''} transition-colors`}
-                        >
-                          <Globe className="w-4 h-4" />
-                          Tìm kiếm web
-                        </button>
-                        <button
-                          onClick={handleGenerateImage}
-                          disabled={isLoading || !input.trim()}
-                          className={`w-full flex items-center gap-3 px-4 py-2 text-left ${theme === 'dark' ? 'hover:bg-gray-700 text-white' : 'hover:bg-gray-200 text-gray-900'} ${isLoading || !input.trim() ? 'opacity-50 cursor-not-allowed' : ''} transition-colors`}
-                        >
-                          <Image className="w-4 h-4" />
-                          Tạo ảnh
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
-                <button 
-                  className={`p-2 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-700' : 'hover:bg-gray-200'} ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  title="Ghi âm"
-                  disabled={isLoading}
-                >
-                  <Mic className="w-5 h-5 text-gray-400" />
-                </button>
-                <button
-                  onClick={handleSendMessage}
-                  disabled={isLoading || !input.trim()}
-                  className={`p-2.5 rounded-xl transition-all ${input.trim() ? (theme === 'dark' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-blue-500 hover:bg-blue-600') : 'bg-gray-700 text-gray-500 cursor-not-allowed'} text-white shadow-lg hover:shadow-xl transform hover:scale-105`}
-                  title="Gửi (Enter)"
-                >
-                  {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
-                </button>
               </div>
             </div>
             
