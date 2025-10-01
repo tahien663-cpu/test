@@ -150,7 +150,7 @@ const ChatHistoryItem = ({ chat, isActive, onClick, onDelete, theme }) => (
   </div>
 );
 
-const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentChatId, onChatSelect, onNewChat, onDeleteChat, searchTerm, onSearchChange, onHome }) => {
+const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentChatId, onChatSelect, onNewChat, onDeleteChat, searchTerm, onSearchChange, onHome, navigate }) => {
   const groupedChats = useMemo(() => {
     const groups = {};
     chatHistory.forEach(chat => {
@@ -168,8 +168,8 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
           <div className="p-4 border-b ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'}">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
-                <div className="w-9 h-9 bg-gradient-to-br from-purple-500 to-pink-500 rounded-xl flex items-center justify-center shadow-lg">
-                  <Bot className="w-5 h-5 text-white" />
+                <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg">
+                  <img src="/logo.png" alt="Hein AI Logo" className="w-9 h-9 object-contain" />
                 </div>
                 <span className="font-bold text-lg bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">Hein AI</span>
               </div>
@@ -177,7 +177,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                 onClick={onClose}
                 className="lg:hidden p-2 ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'} rounded-lg transition"
               >
-                <X className="w-5 h-5" />
+                <X className="w-5 h-5 text-gray-900 dark:text-white" />
               </button>
             </div>
             
@@ -629,6 +629,7 @@ export default function Chat() {
         searchTerm={searchTerm}
         onSearchChange={setSearchTerm}
         onHome={handleHome}
+        navigate={navigate}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -637,7 +638,7 @@ export default function Chat() {
             onClick={() => setSidebarOpen(true)}
             className={`p-2 rounded-lg transition ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
           >
-            <Menu className="w-6 h-6" />
+            <Menu className="w-6 h-6 text-gray-900 dark:text-white" />
           </button>
           <h1 className="font-bold text-lg bg-gradient-to-r from-purple-500 to-pink-500 bg-clip-text text-transparent">Hein AI</h1>
           <button 
