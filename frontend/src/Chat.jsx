@@ -1,4 +1,3 @@
-// src/Chat.jsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -165,7 +164,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
     <>
       <div className={`fixed inset-y-0 left-0 z-50 w-80 transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'} lg:relative lg:translate-x-0 ${theme === 'dark' ? 'bg-gray-950 border-r border-gray-800' : 'bg-gray-50 border-r border-gray-200'}`}>
         <div className="h-full flex flex-col">
-          <div className="p-4 border-b ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'}">
+          <div className={`p-4 border-b ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'}`}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl flex items-center justify-center shadow-lg">
@@ -175,7 +174,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
               </div>
               <button 
                 onClick={onClose}
-                className="lg:hidden p-2 ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'} rounded-lg transition"
+                className={`lg:hidden p-2 rounded-lg transition ${theme === 'dark' ? 'hover:bg-gray-800 text-white' : 'hover:bg-gray-200 text-gray-900'}`}
               >
                 <X className="w-5 h-5 text-gray-900 dark:text-white" />
               </button>
@@ -223,7 +222,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
             ))}
           </div>
 
-          <div className="p-4 border-t ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'} space-y-1">
+          <div className={`p-4 border-t ${theme === 'dark' ? 'border-gray-800' : 'border-gray-200'} space-y-1`}>
             <button 
               onClick={onHome}
               className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl transition-colors ${theme === 'dark' ? 'hover:bg-gray-800 text-white' : 'hover:bg-gray-200 text-gray-900'}`}
@@ -633,10 +632,10 @@ export default function Chat() {
       />
 
       <div className="flex-1 flex flex-col min-w-0">
-        <nav className="lg:hidden flex items-center justify-between p-4 border-b ${theme === 'dark' ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-white'}">
+        <nav className={`lg:hidden flex items-center justify-between p-4 border-b ${theme === 'dark' ? 'border-gray-800 bg-gray-900' : 'border-gray-200 bg-white'}`}>
           <button 
             onClick={() => setSidebarOpen(true)}
-            className={`p-2 rounded-lg transition ${theme === 'dark' ? 'hover:bg-gray-800' : 'hover:bg-gray-200'}`}
+            className={`p-2 rounded-lg transition ${theme === 'dark' ? 'hover:bg-gray-800 text-white' : 'hover:bg-gray-200 text-gray-900'}`}
           >
             <Menu className="w-6 h-6 text-gray-900 dark:text-white" />
           </button>
