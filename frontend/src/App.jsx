@@ -4,14 +4,14 @@ import Chat from './Chat';
 
 function App() {
   return (
-    <BrowserRouter basename="/"> {/* Đặt basename="/test" nếu deploy dưới /test */}
+    <BrowserRouter basename="/">
       <Routes>
         <Route path="/" element={<Login />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/chat/:chatId" element={<Chat />} /> {/* Route động cho chat */}
+        <Route path="/chat/:chatId" element={<Chat />} />
         <Route path="/home" element={<Login />} />
         <Route path="/settings" element={<Login />} />
-        <Route path="*" element={<div>404 - Không tìm thấy trang</div>} /> {/* Route fallback */}
+        <Route path="*" element={<Login />} /> {/* Fallback về Login */}
       </Routes>
     </BrowserRouter>
   );
