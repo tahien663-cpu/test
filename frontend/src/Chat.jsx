@@ -248,7 +248,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 space-y-4">
+          <div className="flex-1 overflow-y-auto px-4 space-y-4 scrollbar-hide">
             {Object.entries(groupedChats).map(([date, chats]) => (
               <div key={date}>
                 <h3 className={`text-xs font-semibold mb-2 px-2 ${
@@ -403,11 +403,13 @@ export default function Chat() {
 
   // Handle keydown
   const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
+    if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      handleSendMessage();
+      if (!isLoading && input.trim()) {
+        handleSendMessage();
+      }
     }
-  }, [isLoading]);
+  }, [isLoading, input, handleSendMessage]);
 
   // Stop generation
   const stopGeneration = useCallback(() => {
@@ -706,7 +708,7 @@ export default function Chat() {
 
         <div 
           ref={messagesContainerRef} 
-          className={`flex-1 overflow-y-auto px-4 py-6 lg:px-8 ${
+          className={`flex-1 overflow-y-auto px-4 py-6 lg:px-8 scrollbar-hide ${
             theme === 'dark' ? 'bg-gray-900' : 'bg-white'
           }`}
         >
