@@ -7,6 +7,19 @@ import {
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
 
+// CSS để ẩn scrollbar
+const hideScrollbarStyle = document.createElement('style');
+hideScrollbarStyle.textContent = `
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+`;
+document.head.appendChild(hideScrollbarStyle);
+
 // ==================== UTILITIES ====================
 const parseMarkdown = (text) => {
   if (!text || typeof text !== 'string') return '';
@@ -248,7 +261,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 space-y-4">
+          <div className="flex-1 overflow-y-auto px-4 space-y-4 scrollbar-hide" style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
             {Object.entries(groupedChats).map(([date, chats]) => (
               <div key={date}>
                 <h3 className={`text-xs font-semibold mb-2 px-2 ${
@@ -401,23 +414,6 @@ export default function Chat() {
     }
   }, [chatHistory, messages]);
 
-  // Handle keydown
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
-      e.preventDefault();
-      handleSendMessage();
-    }
-  }, [isLoading]);
-
-  // Stop generation
-  const stopGeneration = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      setIsLoading(false);
-      abortControllerRef.current = null;
-    }
-  }, []);
-
   // Handle send message
   const handleSendMessage = useCallback(async () => {
     if (!input.trim() || isLoading) return;
@@ -492,6 +488,23 @@ export default function Chat() {
       abortControllerRef.current = null;
     }
   }, [input, isLoading, currentChatId, messages, loadChatHistory, navigate]);
+
+  // Handle keydown
+  const handleKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !isLoading) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  }, [isLoading, handleSendMessage]);
+
+  // Stop generation
+  const stopGeneration = useCallback(() => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsLoading(false);
+      abortControllerRef.current = null;
+    }
+  }, []);
 
   // Handle web search
   const handleWebSearch = useCallback(async () => {
@@ -706,9 +719,10 @@ export default function Chat() {
 
         <div 
           ref={messagesContainerRef} 
-          className={`flex-1 overflow-y-auto px-4 py-6 lg:px-8 ${
+          className={`flex-1 overflow-y-auto px-4 py-6 lg:px-8 scrollbar-hide ${
             theme === 'dark' ? 'bg-gray-900' : 'bg-white'
           }`}
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
         >
           <div className="max-w-4xl mx-auto">
             {error && (
