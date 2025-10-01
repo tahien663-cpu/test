@@ -1,3 +1,4 @@
+
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -134,7 +135,7 @@ app.get('/', (req, res) => {
       '/api/message/:messageId'
     ],
     features: [
-      'AI-enhanced image prompts',
+      'AI-enhanced image and chat prompts',
       'Optimized smart polling (2s + 5x0.8s)',
       'Rate limit: 15 images/min'
     ]
@@ -162,23 +163,21 @@ function validateId(id) {
   return validate(id);
 }
 
-// Enhance image prompt using AI with timeout
-async function enhanceImagePrompt(userPrompt) {
+// Enhance prompt using AI with timeout
+async function enhancePrompt(userPrompt, isImagePrompt = false) {
   try {
-    console.log(`Starting prompt enhancement for: "${userPrompt}"`);
+    console.log(`Starting prompt enhancement for: "${userPrompt}" (Image: ${isImagePrompt})`);
     
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
     
+    const systemMessage = isImagePrompt
+      ? 'You are a photo editing assistant. Translate the user\'s image request into English (if it isn\'t already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 60 characters. Focus on: style, lighting, composition. ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
+      : 'You are a conversational AI assistant. Enhance the user\'s prompt to make it clearer and more detailed for better AI responses, while preserving the original intent. Keep the enhanced prompt under 200 characters. Return only the enhanced prompt, nothing else.';
+    
     const enhanceMessages = [
-      {
-        role: 'system',
-        content: 'You are a photo editing assistant. Translate the user\'s image request into English (if it isn\'t already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 60 characters. Focus on: style, lighting, composition.ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
-      },
-      {
-        role: 'user',
-        content: `Enhance this image prompt: "${userPrompt}"`
-      }
+      { role: 'system', content: systemMessage },
+      { role: 'user', content: `Enhance this prompt: "${userPrompt}"` }
     ];
 
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -193,7 +192,7 @@ async function enhanceImagePrompt(userPrompt) {
         model: 'x-ai/grok-4-fast:free',
         messages: enhanceMessages,
         temperature: 0.7,
-        max_tokens: 100
+        max_tokens: isImagePrompt ? 100 : 200
       }),
       signal: controller.signal
     });
@@ -208,7 +207,8 @@ async function enhanceImagePrompt(userPrompt) {
     const data = await response.json();
     const enhancedPrompt = data.choices?.[0]?.message?.content?.trim() || userPrompt;
     
-    const finalPrompt = enhancedPrompt.length > 200 ? enhancedPrompt.substring(0, 197) + '...' : enhancedPrompt;
+    const maxLength = isImagePrompt ? 200 : 500;
+    const finalPrompt = enhancedPrompt.length > maxLength ? enhancedPrompt.substring(0, maxLength - 3) + '...' : enhancedPrompt;
     
     console.log(`Prompt enhanced successfully: "${finalPrompt}"`);
     return finalPrompt;
@@ -499,11 +499,19 @@ app.post('/api/login', authLimiter, async (req, res) => {
 // Chat endpoint
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
-    const { messages, chatId } = req.body;
-    console.info(`Processing chat request: userId=${req.user.id}, chatId=${chatId}`);
+    const { messages, chatId, prompt } = req.body;
+    console.info(`Processing chat request: userId=${req.user.id}, chatId=${chatId}, prompt=${prompt || 'none'}`);
     
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
       return res.status(400).json({ error: 'Invalid messages format', code: 'INVALID_INPUT' });
+    }
+
+    if (prompt && (typeof prompt !== 'string' || prompt.trim().length === 0)) {
+      return res.status(400).json({ error: 'Invalid prompt format', code: 'INVALID_PROMPT' });
+    }
+
+    if (prompt && prompt.length > 500) {
+      return res.status(400).json({ error: 'Prompt too long (max 500 characters)', code: 'PROMPT_TOO_LONG' });
     }
 
     const userId = req.user.id;
@@ -515,7 +523,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     // Create or verify chat
     if (!chatId) {
-      const firstMessage = sanitizeInput(messages[0]?.content || 'New chat');
+      const firstMessage = sanitizeInput(prompt || messages[0]?.content || 'New chat');
       const { data: chat, error: chatError } = await supabase
         .from('chats')
         .insert([{ user_id: userId, title: firstMessage.substring(0, 50) }])
@@ -542,21 +550,22 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     // Save user message
-    const lastUserMessage = messages.filter(m => m.role === 'user').pop();
-    if (lastUserMessage) {
+    const userContent = prompt ? sanitizeInput(prompt) : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
+    if (userContent) {
       await supabase
         .from('messages')
         .insert([{
           chat_id: newChatId,
           role: 'user',
-          content: sanitizeInput(lastUserMessage.content),
+          content: userContent,
           timestamp: new Date().toISOString()
         }]);
+    } else {
+      return res.status(400).json({ error: 'No valid user message or prompt provided', code: 'INVALID_INPUT' });
     }
 
     // Check if this is a web search request
     let aiMessage = '';
-    const userContent = lastUserMessage?.content || '';
     const isWebSearch = userContent.toLowerCase().startsWith('tìm kiếm web:');
 
     if (isWebSearch) {
@@ -569,12 +578,37 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         aiMessage = 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
       }
     } else {
-      // Regular AI response
+      // Enhance prompt if provided
+      let finalPrompt = userContent;
+      if (prompt) {
+        console.log(`Enhancing chat prompt...`);
+        finalPrompt = await enhancePrompt(userContent, false);
+      }
+
+      // Prepare messages for OpenRouter
       const mappedMessages = messages.map(m => ({
         role: m.role === 'ai' ? 'assistant' : m.role,
         content: sanitizeInput(m.content)
       }));
 
+      // Replace the last user message with the enhanced prompt (if applicable)
+      if (prompt && finalPrompt !== userContent) {
+        mappedMessages[mappedMessages.length - 1] = {
+          role: 'user',
+          content: finalPrompt
+        };
+      }
+
+      // Add system prompt
+      const messagesWithSystem = [
+        {
+          role: 'system',
+          content: 'Bạn là Hein được tạo bởi Hien2309 1 AI toàn diện về mọi mặt ko nói láo bốc phét'
+        },
+        ...mappedMessages
+      ];
+
+      // Regular AI response
       const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -585,7 +619,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         },
         body: JSON.stringify({
           model: 'x-ai/grok-4-fast:free',
-          messages: mappedMessages
+          messages: messagesWithSystem
         })
       });
 
@@ -596,6 +630,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
       const data = await response.json();
       aiMessage = data.choices?.[0]?.message?.content || 'No response from AI';
+      if (prompt && finalPrompt !== userContent) {
+        aiMessage = `${aiMessage}\n\n*Enhanced prompt: ${finalPrompt}*`;
+      }
     }
 
     const { data: savedMessage, error: messageError } = await supabase
@@ -618,7 +655,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     await supabase
       .from('chats')
       .update({
-        last_message: sanitizeInput(lastUserMessage?.content || 'Chat').substring(0, 100),
+        last_message: sanitizeInput(userContent).substring(0, 100),
         updated_at: new Date().toISOString()
       })
       .eq('id', newChatId);
@@ -628,7 +665,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       message: aiMessage,
       messageId: savedMessage.id,
       chatId: newChatId,
-      timestamp: savedMessage.timestamp
+      timestamp: savedMessage.timestamp,
+      enhancedPrompt: prompt && finalPrompt !== userContent ? finalPrompt : undefined,
+      originalPrompt: prompt ? userContent : undefined
     });
   } catch (err) {
     console.error(`Chat endpoint error: ${err.message}`);
@@ -699,7 +738,7 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     console.log(`Enhancing prompt with AI...`);
     const startTime = Date.now();
     
-    const enhancedPrompt = await enhanceImagePrompt(sanitizedPrompt);
+    const enhancedPrompt = await enhancePrompt(sanitizedPrompt, true);
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
 
@@ -998,7 +1037,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`Server started on port ${process.env.PORT || 3001}`);
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
-  console.info(`AI-enhanced image prompts: enabled`);
+  console.info(`AI-enhanced prompts: enabled (chat and image)`);
   console.info(`Smart polling verification: enabled (2s initial + 5x0.8s checks)`);
 });
 
