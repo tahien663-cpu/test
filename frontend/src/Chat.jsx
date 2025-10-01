@@ -96,8 +96,12 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
   
   return (
     <div className={`flex gap-3 mb-6 ${isUser ? 'flex-row-reverse' : 'flex-row'} group`}>
-      <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${isUser ? 'bg-blue-500' : 'bg-gradient-to-br from-purple-500 to-pink-500'} shadow-lg`}>
-        {isUser ? <User className="w-5 h-5 text-white" /> : <Bot className="w-5 h-5 text-white" />}
+      <div className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center ${isUser ? 'bg-blue-500' : 'bg-white'} shadow-lg overflow-hidden`}>
+        {isUser ? (
+          <User className="w-5 h-5 text-white" />
+        ) : (
+          <img src="/logo.png" alt="Hein AI" className="w-full h-full object-cover" />
+        )}
       </div>
       <div className={`max-w-[75%] md:max-w-[65%] ${isUser ? 'items-end' : 'items-start'} flex flex-col`}>
         <div className={`px-4 py-3 rounded-2xl ${
@@ -735,8 +739,8 @@ export default function Chat() {
             ))}
             {isLoading && (
               <div className="flex gap-3 mb-6">
-                <div className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center bg-gradient-to-br from-purple-500 to-pink-500 shadow-lg">
-                  <Bot className="w-5 h-5 text-white" />
+                <div className="flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center bg-white shadow-lg overflow-hidden">
+                  <img src="/logo.png" alt="Hein AI" className="w-full h-full object-cover" />
                 </div>
                 <div className={`px-4 py-3 rounded-2xl rounded-tl-md shadow-md ${
                   theme === 'dark' 
