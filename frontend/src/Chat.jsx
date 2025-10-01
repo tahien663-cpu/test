@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useRef, useCallback, useMemo, forwardRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -7,8 +8,8 @@ import {
 import DOMPurify from 'dompurify';
 import apiService from './services/api';
 
-// Custom UploadIcon component
-const UploadIcon = forwardRef(({ className, size = 24, strokeWidth = 2, ...props }, ref) => (
+// Custom DownloadIcon component
+const DownloadIcon = forwardRef(({ className, size = 24, strokeWidth = 2, ...props }, ref) => (
   <svg
     ref={ref}
     xmlns="http://www.w3.org/2000/svg"
@@ -24,8 +25,8 @@ const UploadIcon = forwardRef(({ className, size = 24, strokeWidth = 2, ...props
     {...props}
   >
     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-    <polyline points="17 8 12 3 7 8" />
-    <line x1="12" y1="3" x2="12" y2="15" />
+    <polyline points="7 10 12 15 17 10" />
+    <line x1="12" y1="15" x2="12" y2="3" />
   </svg>
 ));
 
@@ -61,7 +62,7 @@ const parseMarkdown = (text) => {
       .replace(/\*([^\*]+)\*/g, '<em class="italic">$1</em>')
       .replace(/_([^_]+)_/g, '<em class="italic">$1</em>')
       .replace(/~~(.*?)~~/g, '<del class="line-through opacity-70">$1</del>')
-      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<img src="$2" alt="$1" class="max-w-full h-auto rounded-xl my-3 shadow-lg" />')
+      .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, '<div class="my-3 relative group"><img src="$2" alt="$1" class="max-w-full h-auto rounded-xl my-3 shadow-lg" /><button class="download-btn absolute top-3 right-3 opacity-0 group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all" data-url="$2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4 M7 10l5 5 5-5M12 15V3"></path></svg></button></div>')
       .replace(/\n/g, '<br>')
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:text-blue-600 underline">$1</a>')
       .replace(/^(#{1,6})\s*(.*)$/gm, (match, level, content) => {
@@ -74,7 +75,7 @@ const parseMarkdown = (text) => {
 
     return DOMPurify.sanitize(html, { 
       ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'button', 'img'],
-      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt', 'data-code']
+      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt', 'data-code', 'data-url']
     });
   } catch (err) {
     console.error('Markdown parse error:', err);
@@ -124,9 +125,38 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
           .catch(err => console.error('Copy error:', err));
       }
     };
+
+    const handleDownload = (e) => {
+      if (e.target.closest('.download-btn')) {
+        const btn = e.target.closest('.download-btn');
+        const url = btn.getAttribute('data-url');
+        fetch(url, { mode: 'cors' })
+          .then(response => response.blob())
+          .then(blob => {
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `hein-ai-image-${Date.now()}.png`;
+            link.click();
+            URL.revokeObjectURL(link.href);
+            const originalHTML = btn.innerHTML;
+            btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
+            setTimeout(() => {
+              btn.innerHTML = originalHTML;
+            }, 2000);
+          })
+          .catch(err => {
+            console.error('Download error:', err);
+            alert('Không thể tải ảnh: ' + err.message);
+          });
+      }
+    };
     
     contentRef.current.addEventListener('click', handleCopy);
-    return () => contentRef.current?.removeEventListener('click', handleCopy);
+    contentRef.current.addEventListener('click', handleDownload);
+    return () => {
+      contentRef.current?.removeEventListener('click', handleCopy);
+      contentRef.current?.removeEventListener('click', handleDownload);
+    };
   }, [msg.content]);
   
   return (
@@ -573,7 +603,7 @@ export default function Chat() {
       const aiMessage = {
         id: data.messageId || `ai-${Date.now()}`,
         role: 'ai',
-        content: data.message || `![Generated Image](${data.imageUrl})`,
+        content: `![Generated Image](${data.imageUrl})`,
         timestamp: data.timestamp || new Date().toISOString()
       };
 
@@ -609,95 +639,6 @@ export default function Chat() {
       abortControllerRef.current = null;
     }
   }, [input, isLoading, currentChatId, loadChatHistory, navigate]);
-
-  // Handle image upload
-  const handleImageUpload = useCallback(async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-
-    // Validate file type and size
-    const allowedTypes = ['image/png', 'image/jpeg', 'image/gif'];
-    const maxSize = 5 * 1024 * 1024; // 5MB
-    if (!allowedTypes.includes(file.type)) {
-      setError('Chỉ hỗ trợ định dạng PNG, JPEG, hoặc GIF.');
-      return;
-    }
-    if (file.size > maxSize) {
-      setError('Kích thước file tối đa là 5MB.');
-      return;
-    }
-
-    const userMessage = {
-      id: `user-${Date.now()}`,
-      role: 'user',
-      content: `Đã tải lên ảnh: ${file.name}`,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-    setIsLoading(true);
-    setError(null);
-
-    try {
-      abortControllerRef.current = new AbortController();
-      const formData = new FormData();
-      formData.append('image', file);
-      formData.append('chatId', currentChatId || '');
-
-      const data = await apiService.request('/upload-image', {
-        method: 'POST',
-        body: formData,
-        signal: abortControllerRef.current.signal,
-      });
-
-      if (!data.imageUrl) {
-        throw new Error('No image URL returned from API');
-      }
-
-      const aiMessage = {
-        id: data.messageId || `ai-${Date.now()}`,
-        role: 'ai',
-        content: `![Uploaded Image](${data.imageUrl})`,
-        timestamp: data.timestamp || new Date().toISOString(),
-      };
-
-      setMessages((prev) => [...prev, aiMessage]);
-
-      if (data.chatId && !currentChatId) {
-        setCurrentChatId(data.chatId);
-      }
-
-      await loadChatHistory();
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('Image upload error:', err);
-        const errorMsg =
-          err.message.includes('401') || err.message.includes('403')
-            ? 'Phiên đăng nhập hết hạn. Vui lòng đăng nhập lại.'
-            : `Không thể tải ảnh lên: ${err.message}`;
-
-        setError(errorMsg);
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `error-${Date.now()}`,
-            role: 'ai',
-            content: `**Lỗi**: ${errorMsg}`,
-            timestamp: new Date().toISOString(),
-          },
-        ]);
-
-        if (err.message.includes('401') || err.message.includes('403')) {
-          localStorage.clear();
-          navigate('/login');
-        }
-      }
-    } finally {
-      setIsLoading(false);
-      abortControllerRef.current = null;
-      e.target.value = ''; // Reset file input
-    }
-  }, [currentChatId, loadChatHistory, navigate]);
 
   // Delete chat
   const deleteChat = useCallback(async (id) => {
@@ -809,7 +750,7 @@ export default function Chat() {
             className={`p-2 rounded-lg transition ${
               theme === 'dark' 
                 ? 'hover:bg-gray-800 text-white' 
-                : 'hover:bg-gray-100 text-gray-900'
+                : 'hover:bg-gray-200 text-gray-900'
             }`}
           >
             <Menu className="w-6 h-6" />
@@ -896,7 +837,7 @@ export default function Chat() {
                 onChange={handleInputChange}
                 onKeyDown={handleKeyDown}
                 placeholder="Nhập tin nhắn của bạn..."
-                className={`w-full px-4 py-3.5 pr-40 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
+                className={`w-full px-4 py-3.5 pr-32 rounded-2xl resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
                   theme === 'dark' 
                     ? 'bg-gray-800 text-white placeholder-gray-500 border border-gray-700' 
                     : 'bg-gray-100 text-gray-900 placeholder-gray-400 border border-gray-300'
@@ -906,26 +847,6 @@ export default function Chat() {
               />
               
               <div className="absolute right-2 bottom-2 flex items-center gap-1">
-                <input
-                  type="file"
-                  id="image-upload"
-                  accept="image/png,image/jpeg,image/gif"
-                  onChange={handleImageUpload}
-                  className="hidden"
-                  disabled={isLoading}
-                />
-                <label
-                  htmlFor="image-upload"
-                  aria-label="Upload an image"
-                  className={`p-2 rounded-xl transition-colors ${
-                    theme === 'dark' 
-                      ? 'hover:bg-gray-700 text-gray-300 hover:text-white' 
-                      : 'hover:bg-gray-200 text-gray-600 hover:text-gray-900'
-                  } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  title="Tải ảnh lên"
-                >
-                  <UploadIcon className="w-5 h-5" />
-                </label>
                 <button 
                   onClick={handleWebSearch}
                   className={`p-2 rounded-xl transition-colors ${
