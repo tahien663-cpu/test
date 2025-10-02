@@ -204,18 +204,18 @@ export default function Home() {
           <div className={`backdrop-blur-2xl rounded-3xl p-6 sm:p-8 max-w-lg w-full transform transition-all duration-300 scale-95 animate-[modalIn_0.3s_ease-out_forwards] ${theme === 'light' ? 'bg-gray-800/90' : 'bg-white/[0.08]'}`}>
             <div className="flex items-center gap-3 mb-4">
               <Sparkles className={`w-7 h-7 ${theme === 'light' ? 'text-blue-200' : 'text-blue-400'}`} />
-              <h2 className={`text-2xl font-bold ${theme === 'light' ? 'text-gray-100' : 'text-white'}`}>About Hein AI</h2>
+              <h2 className={`text-2xl font-bold ${theme === 'light' ? 'text-black' : 'text-white'}`}>About Hein AI</h2>
             </div>
             
-            <div className={`space-y-4 ${theme === 'light' ? 'text-gray-100' : 'text-white/90'}`}>
+            <div className={`space-y-4 ${theme === 'light' ? 'text-black' : 'text-white/90'}`}>
               <p>
-                <strong className={theme === 'light' ? 'text-gray-100' : 'text-white'}>Hein AI</strong> là một ứng dụng chat AI hiện đại, được phát triển để mang lại trải nghiệm trò chuyện tự nhiên và thông minh.
+                <strong className={theme === 'light' ? 'text-back' : 'text-white'}>Hein AI</strong> là một ứng dụng chat AI hiện đại, được phát triển để mang lại trải nghiệm trò chuyện tự nhiên và thông minh.
               </p>
               
               <div>
                 <div className="flex items-center gap-2 mb-2">
                   <Zap className={`w-5 h-5 ${theme === 'light' ? 'text-blue-200' : 'text-blue-400'}`} />
-                  <p className={`font-semibold ${theme === 'light' ? 'text-gray-100' : 'text-white'}`}>Các tính năng chính:</p>
+                  <p className={`font-semibold ${theme === 'light' ? 'text-black' : 'text-white'}`}>Các tính năng chính:</p>
                 </div>
                 <ul className="list-disc list-inside ml-7 space-y-1">
                   <li>Trò chuyện với AI thời gian thực</li>
@@ -227,12 +227,12 @@ export default function Home() {
               
               <div className="flex items-center gap-2 pt-2">
                 <Calendar className={`w-5 h-5 ${theme === 'light' ? 'text-blue-200' : 'text-blue-400'}`} />
-                <p>Phiên bản hiện tại: <strong className={theme === 'light' ? 'text-gray-100' : 'text-white'}>v2.1</strong></p>
+                <p>Phiên bản hiện tại: <strong className={theme === 'light' ? 'text-black' : 'text-white'}>v2.1</strong></p>
               </div>
               
               <div className="flex items-center gap-2">
                 <User className={`w-5 h-5 ${theme === 'light' ? 'text-blue-200' : 'text-blue-400'}`} />
-                <p>Nhà phát triển: <strong className={theme === 'light' ? 'text-gray-100' : 'text-white'}>Hien2309</strong></p>
+                <p>Nhà phát triển: <strong className={theme === 'light' ? 'text-black' : 'text-white'}>Hien2309</strong></p>
               </div>
             </div>
             
