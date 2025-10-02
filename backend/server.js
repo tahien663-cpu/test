@@ -1,4 +1,3 @@
-
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
@@ -123,7 +122,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.5',
+    version: '1.0.6',
     endpoints: [
       '/health',
       '/api/register',
@@ -135,7 +134,8 @@ app.get('/', (req, res) => {
       '/api/message/:messageId'
     ],
     features: [
-      'AI-enhanced image and chat prompts',
+      'AI-enhanced image prompts (70 chars max)',
+      'AI-enhanced chat prompts (200 chars max)',
       'Optimized smart polling (2s + 5x0.8s)',
       'Rate limit: 15 images/min'
     ]
@@ -172,7 +172,7 @@ async function enhancePrompt(userPrompt, isImagePrompt = false) {
     const timeout = setTimeout(() => controller.abort(), 8000);
     
     const systemMessage = isImagePrompt
-      ? 'You are a photo editing assistant. Translate the user\'s image request into English (if it isn\'t already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 60 characters. Focus on: style, lighting, composition. ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
+      ? 'You are a photo editing assistant. Translate the user\'s image request into English (if it isn\'t already) and edit it with artistic details to create a beautiful image. Keep the photo editing prompt under 70 characters. Focus on: style, lighting, composition. ABSOLUTELY no periods or commas. ONLY return the photo editing prompt, nothing else.'
       : 'You are a conversational AI assistant. Enhance the user\'s prompt to make it clearer and more detailed for better AI responses, while preserving the original intent. Keep the enhanced prompt under 200 characters. Return only the enhanced prompt, nothing else.';
     
     const enhanceMessages = [
@@ -396,7 +396,7 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.5',
+      version: '1.0.6',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
       dependencies: { supabase: 'connected', openRouter: 'connected' }
@@ -566,6 +566,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     // Check if this is a web search request
     let aiMessage = '';
+    let enhancedPromptUsed = false;
+    let finalPrompt = userContent;
     const isWebSearch = userContent.toLowerCase().startsWith('tìm kiếm web:');
 
     if (isWebSearch) {
@@ -579,10 +581,13 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
     } else {
       // Enhance prompt if provided
-      let finalPrompt = userContent;
       if (prompt) {
         console.log(`Enhancing chat prompt...`);
-        finalPrompt = await enhancePrompt(userContent, false);
+        const enhancedResult = await enhancePrompt(userContent, false);
+        if (enhancedResult !== userContent) {
+          finalPrompt = enhancedResult;
+          enhancedPromptUsed = true;
+        }
       }
 
       // Prepare messages for OpenRouter
@@ -592,7 +597,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }));
 
       // Replace the last user message with the enhanced prompt (if applicable)
-      if (prompt && finalPrompt !== userContent) {
+      if (enhancedPromptUsed) {
         mappedMessages[mappedMessages.length - 1] = {
           role: 'user',
           content: finalPrompt
@@ -630,7 +635,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
       const data = await response.json();
       aiMessage = data.choices?.[0]?.message?.content || 'No response from AI';
-      if (prompt && finalPrompt !== userContent) {
+      if (enhancedPromptUsed) {
         aiMessage = `${aiMessage}\n\n*Enhanced prompt: ${finalPrompt}*`;
       }
     }
@@ -666,8 +671,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       messageId: savedMessage.id,
       chatId: newChatId,
       timestamp: savedMessage.timestamp,
-      enhancedPrompt: prompt && finalPrompt !== userContent ? finalPrompt : undefined,
-      originalPrompt: prompt ? userContent : undefined
+      enhancedPrompt: enhancedPromptUsed ? finalPrompt : undefined,
+      originalPrompt: enhancedPromptUsed ? userContent : undefined
     });
   } catch (err) {
     console.error(`Chat endpoint error: ${err.message}`);
