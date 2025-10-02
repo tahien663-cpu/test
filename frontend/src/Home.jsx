@@ -204,10 +204,10 @@ export default function Home() {
           <div className={`backdrop-blur-2xl rounded-3xl p-6 sm:p-8 max-w-lg w-full transform transition-all duration-300 scale-95 animate-[modalIn_0.3s_ease-out_forwards] ${theme === 'light' ? 'bg-white' : 'bg-white/[0.08]'}`}>
             <div className="flex items-center gap-3 mb-4">
               <Sparkles className={`w-7 h-7 ${theme === 'light' ? 'text-blue-600' : 'text-blue-400'}`} />
-              <h2 className={`text-2xl font-bold ${theme === 'light' ? 'text-gray-800' : 'text-white'}`}>About Hein AI</h2>
+              <h2 className={`text-2xl font-bold ${theme === 'light' ? 'text-gray-900' : 'text-white'}`}>About Hein AI</h2>
             </div>
             
-            <div className={`space-y-4 ${theme === 'light' ? 'text-gray-700' : 'text-white/90'}`}>
+            <div className={`space-y-4 ${theme === 'light' ? 'text-gray-800' : 'text-white/90'}`}>
               <p>
                 <strong className={theme === 'light' ? 'text-gray-900' : 'text-white'}>Hein AI</strong> là một ứng dụng chat AI hiện đại, được phát triển để mang lại trải nghiệm trò chuyện tự nhiên và thông minh.
               </p>
