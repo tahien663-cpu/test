@@ -197,64 +197,40 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Change Log Modal */}
-      {showChangeLog && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-40 transition-opacity duration-300">
-          <div className={`backdrop-blur-2xl rounded-3xl p-6 sm:p-8 max-w-md w-full transform transition-all duration-300 scale-95 animate-[modalIn_0.3s_ease-out_forwards] ${theme === 'light' ? 'bg-white' : 'bg-white/[0.08]'}`}>
-            <h2 className={`text-2xl font-bold mb-4 ${theme === 'light' ? 'text-gray-800' : 'text-white'}`}>🚀 Change Log</h2>
-            <ul className={`text-white/80 list-disc list-inside space-y-2 text-sm sm:text-base ${theme === 'light' ? 'text-gray-700' : 'text-white/80'}`}>
-              <li>25/09/2025 - v2.1:
-                <ul className="list-circle ml-6 space-y-1">
-                  <li>Thêm API verify token và get profile</li>
-                  <li>Thêm chat history endpoint (mock)</li>
-                  <li>Cải thiện ApiService với singleton class</li>
-                  <li>Cập nhật error handling và base URL</li>
-                </ul>
-              </li>
-              <li>23/09/2025 - v2.0:
-                <ul className="list-circle ml-6 space-y-1">
-                  <li>Thêm hiệu ứng particles động</li>
-                  <li>Cải thiện responsive design</li>
-                  <li>Thêm animation chuyển trang mượt mà</li>
-                  <li>Tối ưu hiệu ứng hover và focus</li>
-                  <li>Thêm chức năng Cài Đặt và Giao Diện</li>
-                  <li>Thêm modal Change Log và gradient tùy chỉnh</li>
-                </ul>
-              </li>
-              <li>23/09/2025 - v1.5:
-                <ul className="list-circle ml-6 space-y-1">
-                  <li>Cập nhật UI với gradient và blur effects</li>
-                  <li>Tích hợp AI chat API backend</li>
-                  <li>Thêm hiển thị thời gian thực</li>
-                  <li>Cải thiện trải nghiệm người dùng</li>
-                </ul>
-              </li>
-              <li>23/09/2025 - v1.0:
-                <ul className="list-circle ml-6 space-y-1">
-                  <li>Phiên bản đầu tiên</li>
-                  <li>Chức năng đăng nhập/đăng ký cơ bản</li>
-                  <li>Chat với AI</li>
-                  <li>Giao diện responsive</li>
-                </ul>
-              </li>
-            </ul>
-            <button
-              onClick={() => setShowChangeLog(false)}
-              className={`mt-6 px-4 py-2 rounded-xl transition-all duration-200 hover:scale-105 ${theme === 'light' ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/20'}`}
-            >
-              Đóng
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Change Log Button */}
+{/* About Modal */}
+{showAbout && (
+  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-40 transition-opacity duration-300">
+    <div className={`backdrop-blur-2xl rounded-3xl p-6 sm:p-8 max-w-md w-full transform transition-all duration-300 scale-95 animate-[modalIn_0.3s_ease-out_forwards] ${theme === 'light' ? 'bg-white' : 'bg-white/[0.08]'}`}>
+      <h2 className={`text-2xl font-bold mb-4 ${theme === 'light' ? 'text-gray-800' : 'text-white'}`}>ℹ️ About</h2>
+      <div className={`space-y-3 text-sm sm:text-base ${theme === 'light' ? 'text-gray-700' : 'text-white/80'}`}>
+        <p><strong>Hein AI</strong> là một ứng dụng chat AI hiện đại, được phát triển để mang lại trải nghiệm trò chuyện tự nhiên và thông minh.</p>
+        <p>✨ Các tính năng chính:</p>
+        <ul className="list-disc list-inside ml-2 space-y-1">
+          <li>Trò chuyện với AI thời gian thực</li>
+          <li>Giao diện hiện đại, hỗ trợ Light/Dark Mode</li>
+          <li>Tùy chỉnh hiệu ứng và giao diện</li>
+          <li>Tích hợp API backend để mở rộng chức năng</li>
+        </ul>
+        <p>📅 Phiên bản hiện tại: <strong>v2.1</strong></p>
+        <p>👨‍💻 Nhà phát triển: <strong>Hien2309</strong></p>
+      </div>
       <button
-        onClick={() => setShowChangeLog(true)}
-        className={`fixed bottom-4 right-4 px-4 py-2 rounded-xl font-semibold transition-all duration-200 hover:scale-105 shadow-lg ${theme === 'light' ? 'bg-blue-500 text-white hover:bg-blue-600 shadow-blue-300/30' : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/30'}`}
+        onClick={() => setShowAbout(false)}
+        className={`mt-6 px-4 py-2 rounded-xl transition-all duration-200 hover:scale-105 ${theme === 'light' ? 'bg-blue-500 text-white hover:bg-blue-600' : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/20'}`}
       >
-        Change Log
+        Đóng
       </button>
+    </div>
+  </div>
+)}
+
+{/* About Button */}
+<button
+  onClick={() => setShowAbout(true)}
+  className={`fixed bottom-4 right-4 px-4 py-2 rounded-xl font-semibold transition-all duration-200 hover:scale-105 shadow-lg ${theme === 'light' ? 'bg-blue-500 text-white hover:bg-blue-600 shadow-blue-300/30' : 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-purple-500/30'}`}
+>
+  About
+</button>
     </div>
   );
 }
