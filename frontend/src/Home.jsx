@@ -8,15 +8,12 @@ export default function Home() {
   const [greeting, setGreeting] = useState({ text: '', icon: null });
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isVisible, setIsVisible] = useState(false);
-  const [userName] = useState('User'); // Thay 'Bạn' bằng tên người dùng, ví dụ: 'User'
+  const [userName, setUserName] = useState(localStorage.getItem('userName') || 'User');
   const [showAbout, setShowAbout] = useState(false);
-  const [theme, setTheme] = useState(() => {
-    const saved = localStorage.getItem('theme');
-    return saved || 'dark';
-  });
-  const [accent, setAccent] = useState('blue');
-  const [particles, setParticles] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(false);
+  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'dark');
+  const [accent, setAccent] = useState(() => localStorage.getItem('accent') || 'blue');
+  const [particles, setParticles] = useState(() => localStorage.getItem('particles') === 'true');
+  const [reducedMotion, setReducedMotion] = useState(() => localStorage.getItem('reducedMotion') === 'true');
 
   useEffect(() => {
     const timer = setTimeout(() => setIsVisible(true), 300);
@@ -43,8 +40,8 @@ export default function Home() {
   }, [userName]);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
     localStorage.setItem('theme', theme);
+    document.documentElement.classList.toggle('dark', theme === 'dark');
   }, [theme]);
 
   useEffect(() => {
@@ -56,13 +53,31 @@ export default function Home() {
       emerald: '#10b981',
       orange: '#f97316',
     };
+    localStorage.setItem('accent', accent);
     root.style.setProperty('--accent', map[accent] || '#2563eb');
   }, [accent]);
 
   useEffect(() => {
+    localStorage.setItem('reducedMotion', String(reducedMotion));
     const root = document.documentElement;
     root.style.setProperty('--motion-scale', reducedMotion ? '0' : '1');
   }, [reducedMotion]);
+
+  useEffect(() => {
+    localStorage.setItem('particles', String(particles));
+  }, [particles]);
+
+  useEffect(() => {
+    const onStorage = (e) => {
+      if (e.key === 'accent' && e.newValue) setAccent(e.newValue);
+      if (e.key === 'particles') setParticles(e.newValue === 'true');
+      if (e.key === 'reducedMotion') setReducedMotion(e.newValue === 'true');
+      if (e.key === 'theme' && e.newValue) setTheme(e.newValue);
+      if (e.key === 'userName' && e.newValue) setUserName(e.newValue);
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   const quickActions = [
     {
