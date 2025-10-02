@@ -8,7 +8,7 @@ export default function Home() {
   const [greeting, setGreeting] = useState({ text: '', icon: null });
   const [currentTime, setCurrentTime] = useState(new Date());
   const [isVisible, setIsVisible] = useState(false);
-  const [userName] = useState('Bạn');
+  const [userName] = useState('User'); // Thay 'Bạn' bằng tên người dùng, ví dụ: 'User'
   const [showAbout, setShowAbout] = useState(false);
   const [theme, setTheme] = useState(() => {
     const saved = localStorage.getItem('theme');
@@ -23,9 +23,9 @@ export default function Home() {
 
     const updateGreeting = () => {
       const hour = new Date().getHours();
-      if (hour < 12) setGreeting({ text: 'Chào Buổi Sáng', icon: Sun, color: 'text-yellow-500' });
-      else if (hour < 17) setGreeting({ text: 'Chào Buổi Chiều', icon: Sun, color: 'text-orange-500' });
-      else setGreeting({ text: 'Chào Buổi Tối', icon: Moon, color: 'text-blue-400' });
+      if (hour < 12) setGreeting({ text: `Chào Buổi Sáng, ${userName}`, icon: Sun, color: 'text-yellow-500' });
+      else if (hour < 17) setGreeting({ text: `Chào Buổi Chiều, ${userName}`, icon: Sun, color: 'text-orange-500' });
+      else setGreeting({ text: `Chào Buổi Tối, ${userName}`, icon: Moon, color: 'text-blue-400' });
     };
 
     const updateTime = () => setCurrentTime(new Date());
@@ -40,7 +40,7 @@ export default function Home() {
       clearInterval(gInt);
       clearInterval(tInt);
     };
-  }, []);
+  }, [userName]);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -152,7 +152,7 @@ export default function Home() {
                   className={`w-12 h-12 sm:w-16 sm:h-16 ${greeting.color} drop-shadow-lg animate-pulse`} 
                 />
               )}
-              <span>{greeting.text}, {userName}!</span>
+              <span>{greeting.text}!</span>
             </div>
           </h1>
           <p className={`text-lg ${theme === 'light' ? 'text-gray-600' : 'text-white/80'}`}>
