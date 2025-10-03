@@ -98,11 +98,12 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
         initial={{ y: -100 }}
         animate={{ y: 0 }}
         transition={{ type: "spring", stiffness: 100, damping: 20 }}
-        className={`fixed top-4 left-1/2 transform -translate-x-1/2 w-[calc(100%-2rem)] max-w-5xl transition-all duration-300 z-50 ${
+        style={{ left: '50%', transform: 'translateX(-50%)' }}
+        className={`fixed top-4 w-[calc(100%-2rem)] max-w-5xl transition-all duration-300 z-50 ${
           scrolled 
             ? 'bg-white/95 dark:bg-gray-900/95 shadow-2xl' 
-            : 'bg-gradient-to-r from-sky-500/80 to-indigo-600/80 shadow-xl'
-        } backdrop-blur-xl border border-white/20 rounded-2xl px-4 py-3`}
+            : 'bg-gradient-to-r from-sky-500/70 to-indigo-600/70 shadow-xl'
+        } backdrop-blur-xl border border-white/20 rounded-2xl px-6 py-3`}
       >
         <div className="flex items-center justify-between gap-4">
           {/* Logo Section */}
