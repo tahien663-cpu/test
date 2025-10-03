@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom'; 
-import { Sun, Moon, Menu, X, User, LogOut, Home, MessageSquare } from 'lucide-react'; 
+import { Sun, Moon, Menu, X, User, LogOut, Home, MessageSquare, Settings } from 'lucide-react'; 
 import { motion, AnimatePresence } from 'framer-motion';
 
 const CUSTOM_LOGO_PATH = '/logo.png'; 
@@ -14,12 +14,10 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
   const [uncontrolledTheme, setUncontrolledTheme] = useState('light');
   const [userName, setUserName] = useState('');
   const [showConfirm, setShowConfirm] = useState(false);
-  // Thêm state để kiểm tra lỗi tải ảnh (tùy chọn)
-  const [imageError, setImageError] = useState(false); 
+  const [imageError, setImageError] = useState(false);
+  const [scrolled, setScrolled] = useState(false);
 
   useEffect(() => {
-    // SỬ DỤNG FIRESTORE CHO ỨNG DỤNG THỰC TẾ
-    // Lưu ý: Trong môi trường thực, bạn nên dùng Firestore hoặc Context/Redux thay vì localStorage
     const name = localStorage.getItem('userName') || '';
     setUserName(name);
     if (controlledTheme == null) {
@@ -27,6 +25,12 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
       setUncontrolledTheme(savedTheme);
       document.documentElement.classList.toggle('dark', savedTheme === 'dark');
     }
+
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 20);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
   }, [controlledTheme]);
 
   const initials = userName
@@ -66,156 +70,316 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
   const toChat = () => navigate('/chat');
   const toHome = () => navigate('/home');
 
-  // Logic hiển thị icon thay thế nếu ảnh bị lỗi
   const renderLogoContent = () => {
     if (imageError) {
-      // Dùng chữ cái hoặc icon dự phòng nếu ảnh lỗi
-      // Tăng kích thước chữ H lên
-      return <span className="text-white font-extrabold text-xl">H</span>;
+      return <span className="text-white font-extrabold text-2xl">H</span>;
     }
     
     return (
       <img
         src={CUSTOM_LOGO_PATH}
         alt="Logo Hein AI"
-        className="w-15 h-15 object-contain" // Đã tăng kích thước ảnh
-        onError={() => setImageError(true)} // Đặt state lỗi nếu không tải được ảnh
+        className="w-10 h-10 object-contain"
+        onError={() => setImageError(true)}
       />
     );
   };
 
-  // Sửa lỗi "Objects are not valid as a React child" 
-  // Lỗi xảy ra do đoạn này không có icon Lucide (MessageSquare đã bị loại bỏ import).
-  // Tôi đã đưa MessageSquare vào lại import. 
-  // Để tránh lỗi Object React Child, tôi đảm bảo icon được render đúng.
   const renderChatHomeIcon = () => {
     if (isChatPage) {
-        return <Home className="inline-block mr-2 w-4 h-4" />;
+        return <Home className="inline-block w-4 h-4" />;
     }
-    // Dùng lại MessageSquare (đã import) thay vì chỉ dùng '💬'
-    return <MessageSquare className="inline-block mr-2 w-4 h-4" />;
+    return <MessageSquare className="inline-block w-4 h-4" />;
   };
 
   return (
     <>
-      <nav className="fixed top-4 left-1/2 transform -translate-x-1/2 w-[calc(100%-2rem)] max-w-5xl bg-gradient-to-r from-sky-500/70 to-indigo-600/70 backdrop-blur-md border border-white/10 rounded-2xl shadow-xl px-4 py-3 z-50">
+      <motion.nav 
+        initial={{ y: -100 }}
+        animate={{ y: 0 }}
+        transition={{ type: "spring", stiffness: 100, damping: 20 }}
+        className={`fixed top-4 left-1/2 transform -translate-x-1/2 w-[calc(100%-2rem)] max-w-6xl transition-all duration-300 z-50 ${
+          scrolled 
+            ? 'bg-white/95 dark:bg-gray-900/95 shadow-2xl' 
+            : 'bg-gradient-to-r from-blue-600/90 via-purple-600/90 to-pink-600/90 shadow-xl'
+        } backdrop-blur-xl border border-white/20 rounded-3xl px-6 py-4`}
+      >
         <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
+          {/* Logo Section */}
+          <div className="flex items-center gap-4">
             <motion.button
-              initial={{ scale: 0.98 }}
-              whileHover={{ scale: 1.02 }}
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => navigate('/')}
-              className="flex items-center gap-3 focus:outline-none"
+              className="flex items-center gap-3 focus:outline-none group"
             >
-              {/* Đã tăng kích thước container (w-12 h-12) và xóa nền xanh (bg-white/20, border, backdrop-blur) */}
-              {/* Đã thay đổi rounded-xl thành rounded-full để bo cong tròn hoàn toàn */}
-              <div className="w-12 h-12 rounded-full flex items-center justify-center bg-transparent"> 
-                {/* Đã thay thế SVG bằng component render logo */}
-                {renderLogoContent()}
+              <div className="relative">
+                <motion.div 
+                  className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${
+                    scrolled 
+                      ? 'bg-gradient-to-br from-blue-500 to-purple-600' 
+                      : 'bg-white/20'
+                  } group-hover:shadow-lg group-hover:shadow-purple-500/50`}
+                  whileHover={{ rotate: 360 }}
+                  transition={{ duration: 0.6 }}
+                >
+                  {renderLogoContent()}
+                </motion.div>
+                <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl blur opacity-0 group-hover:opacity-30 transition-opacity"></div>
               </div>
-              <div className="ml-1 text-left">
-                <h1 className="text-white font-extrabold text-lg leading-tight">
-                  {isChatPage ? 'Chat Với AI' : 'Hein'}
-                </h1>
-                <p className="text-white/80 text-xs -mt-1">{isChatPage ? 'Trò chuyện — Nhanh & Thông minh' : 'Nền tảng AI gọn nhẹ và unlimited'}</p>
+              <div className="hidden sm:block">
+                <motion.h1 
+                  className={`font-bold text-xl leading-tight ${
+                    scrolled ? 'text-gray-900 dark:text-white' : 'text-white'
+                  }`}
+                  whileHover={{ x: 2 }}
+                >
+                  {isChatPage ? 'Chat Với AI' : 'Hein AI'}
+                </motion.h1>
+                <p className={`text-xs leading-tight ${
+                  scrolled ? 'text-gray-600 dark:text-gray-400' : 'text-white/90'
+                }`}>
+                  {isChatPage ? 'Trò chuyện thông minh' : 'AI không giới hạn'}
+                </p>
               </div>
             </motion.button>
           </div>
 
-          <div className="hidden md:flex items-center gap-3">
-            <button
+          {/* Desktop Navigation */}
+          <div className="hidden md:flex items-center gap-2">
+            <motion.button
+              whileHover={{ scale: 1.05, y: -2 }}
+              whileTap={{ scale: 0.95 }}
               onClick={() => (isChatPage ? toHome() : toChat())}
-              className="text-white hover:text-white/95 font-semibold px-3 py-2 rounded-lg hover:bg-white/5 transition"
+              className={`flex items-center gap-2 font-semibold px-4 py-2.5 rounded-xl transition-all ${
+                scrolled
+                  ? 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                  : 'text-white hover:bg-white/20'
+              }`}
             >
-              {/* SỬA LỖI OBJECT: Dùng hàm renderIcon đã được chuẩn hóa */}
-              {renderChatHomeIcon()} 
-              {isChatPage ? 'Trang Chủ' : 'Chat Với AI'}
-            </button>
+              {renderChatHomeIcon()}
+              <span className="hidden lg:inline">{isChatPage ? 'Trang Chủ' : 'Chat AI'}</span>
+            </motion.button>
 
-            <button onClick={toggleTheme} aria-label="Chuyển giao diện" className="p-2 rounded-lg hover:bg-white/5 transition">
-              {currentTheme === 'light' ? <Moon className="w-5 h-5 text-white" /> : <Sun className="w-5 h-5 text-white" />}
-            </button>
+            <motion.button 
+              whileHover={{ scale: 1.05, rotate: 180 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={toggleTheme} 
+              aria-label="Chuyển giao diện" 
+              className={`p-2.5 rounded-xl transition-all ${
+                scrolled
+                  ? 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                  : 'hover:bg-white/20'
+              }`}
+            >
+              {currentTheme === 'light' 
+                ? <Moon className={`w-5 h-5 ${scrolled ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`} /> 
+                : <Sun className={`w-5 h-5 ${scrolled ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`} />
+              }
+            </motion.button>
 
+            {/* User Dropdown */}
             <div className="relative">
-              <button
+              <motion.button
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.98 }}
                 onClick={() => setDropdownOpen((s) => !s)}
-                className="flex items-center gap-3 bg-white/5 hover:bg-white/6 px-3 py-1 rounded-xl focus:outline-none"
+                className={`flex items-center gap-3 px-4 py-2 rounded-xl transition-all ${
+                  scrolled
+                    ? 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700'
+                    : 'bg-white/20 hover:bg-white/30'
+                }`}
               >
-                <div className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-sm font-semibold text-white">{initials}</div>
-                <div className="text-white text-sm truncate max-w-[8rem]">{userName || 'Người dùng'}</div>
-              </button>
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold ${
+                  scrolled
+                    ? 'bg-gradient-to-br from-blue-500 to-purple-600 text-white'
+                    : 'bg-white/30 text-white'
+                }`}>
+                  {initials}
+                </div>
+                <span className={`text-sm font-medium truncate max-w-[8rem] ${
+                  scrolled ? 'text-gray-900 dark:text-white' : 'text-white'
+                }`}>
+                  {userName || 'Người dùng'}
+                </span>
+              </motion.button>
 
               <AnimatePresence>
                 {dropdownOpen && (
                   <motion.div
-                    initial={{ opacity: 0, y: -6 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    className="absolute right-0 mt-2 w-48 bg-white/5 backdrop-blur-sm border border-white/10 rounded-2xl p-2 shadow-lg z-40"
+                    initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 mt-2 w-56 bg-white dark:bg-gray-800 backdrop-blur-xl border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl overflow-hidden z-50"
                   >
-                    <button onClick={() => { navigate('/profile'); setDropdownOpen(false); }} className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-white/3">
-                      <User className="w-4 h-4" /> Hồ sơ
-                    </button>
-                    <button onClick={() => { navigate('/settings'); setDropdownOpen(false); }} className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-white/3">
-                      ⚙️ Cài đặt
-                    </button>
-                    <div className="border-t border-white/6 my-1"></div>
-                    <button onClick={handleLogout} className="flex items-center gap-2 w-full text-left px-3 py-2 rounded hover:bg-red-600/20 text-red-400">
-                      <LogOut className="w-4 h-4" /> Đăng xuất
-                    </button>
+                    <div className="p-2">
+                      <motion.button 
+                        whileHover={{ x: 4, backgroundColor: 'rgba(59, 130, 246, 0.1)' }}
+                        onClick={() => { navigate('/profile'); setDropdownOpen(false); }} 
+                        className="flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl transition-colors text-gray-700 dark:text-gray-300"
+                      >
+                        <User className="w-4 h-4" /> 
+                        <span className="font-medium">Hồ sơ</span>
+                      </motion.button>
+                      <motion.button 
+                        whileHover={{ x: 4, backgroundColor: 'rgba(59, 130, 246, 0.1)' }}
+                        onClick={() => { navigate('/settings'); setDropdownOpen(false); }} 
+                        className="flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl transition-colors text-gray-700 dark:text-gray-300"
+                      >
+                        <Settings className="w-4 h-4" /> 
+                        <span className="font-medium">Cài đặt</span>
+                      </motion.button>
+                      <div className="border-t border-gray-200 dark:border-gray-700 my-2"></div>
+                      <motion.button 
+                        whileHover={{ x: 4, backgroundColor: 'rgba(239, 68, 68, 0.1)' }}
+                        onClick={handleLogout} 
+                        className="flex items-center gap-3 w-full text-left px-4 py-3 rounded-xl text-red-600 dark:text-red-400 font-medium"
+                      >
+                        <LogOut className="w-4 h-4" /> 
+                        Đăng xuất
+                      </motion.button>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
             </div>
           </div>
 
+          {/* Mobile Menu Button */}
           <div className="md:hidden flex items-center gap-2">
-            <button onClick={toggleTheme} aria-label="Chuyển giao diện" className="p-2 rounded-lg hover:bg-white/5 focus:outline-none">
-              {currentTheme === 'light' ? <Moon className="w-5 h-5 text-white" /> : <Sun className="w-5 h-5 text-white" />}
-            </button>
-            <button onClick={() => setMenuOpen((s) => !s)} className="p-2 rounded-lg focus:outline-none">
-              {menuOpen ? <X className="w-6 h-6 text-white" /> : <Menu className="w-6 h-6 text-white" />}
-            </button>
+            <motion.button 
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={toggleTheme} 
+              aria-label="Chuyển giao diện" 
+              className={`p-2 rounded-xl ${
+                scrolled
+                  ? 'hover:bg-gray-100 dark:hover:bg-gray-800'
+                  : 'hover:bg-white/20'
+              }`}
+            >
+              {currentTheme === 'light' 
+                ? <Moon className={`w-5 h-5 ${scrolled ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`} /> 
+                : <Sun className={`w-5 h-5 ${scrolled ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`} />
+              }
+            </motion.button>
+            <motion.button 
+              whileHover={{ scale: 1.05 }}
+              whileTap={{ scale: 0.95 }}
+              onClick={() => setMenuOpen((s) => !s)} 
+              className="p-2 rounded-xl"
+            >
+              {menuOpen 
+                ? <X className={`w-6 h-6 ${scrolled ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`} /> 
+                : <Menu className={`w-6 h-6 ${scrolled ? 'text-gray-700 dark:text-gray-300' : 'text-white'}`} />
+              }
+            </motion.button>
           </div>
         </div>
 
+        {/* Mobile Menu */}
         <AnimatePresence>
           {menuOpen && (
             <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: 'auto', opacity: 1 }}
               exit={{ height: 0, opacity: 0 }}
-              className="md:hidden mt-3"
+              transition={{ duration: 0.2 }}
+              className="md:hidden mt-4 pt-4 border-t border-white/20"
             >
-              <div className="flex flex-col gap-2">
-                <button onClick={() => { isChatPage ? toHome() : toChat(); setMenuOpen(false); }} className="text-white hover:bg-white/5 px-3 py-2 rounded-lg flex items-center gap-2">
-                  <Home className="w-4 h-4" /> {isChatPage ? 'Trang Chủ' : 'Chat Với AI'}
-                </button>
-                <button onClick={() => { navigate('/profile'); setMenuOpen(false); }} className="text-white hover:bg-white/5 px-3 py-2 rounded-lg flex items-center gap-2">
+              <div className="flex flex-col gap-1">
+                <motion.button 
+                  whileHover={{ x: 4 }}
+                  onClick={() => { isChatPage ? toHome() : toChat(); setMenuOpen(false); }} 
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${
+                    scrolled
+                      ? 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                      : 'text-white hover:bg-white/20'
+                  }`}
+                >
+                  {renderChatHomeIcon()}
+                  {isChatPage ? 'Trang Chủ' : 'Chat Với AI'}
+                </motion.button>
+                <motion.button 
+                  whileHover={{ x: 4 }}
+                  onClick={() => { navigate('/profile'); setMenuOpen(false); }} 
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${
+                    scrolled
+                      ? 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                      : 'text-white hover:bg-white/20'
+                  }`}
+                >
                   <User className="w-4 h-4" /> Hồ sơ
-                </button>
-                <button onClick={() => { navigate('/settings'); setMenuOpen(false); }} className="text-white hover:bg-white/5 px-3 py-2 rounded-lg flex items-center gap-2">
-                  ⚙️ Cài đặt
-                </button>
-                <button onClick={handleLogout} className="text-red-400 hover:bg-red-600/10 px-3 py-2 rounded-lg flex items-center gap-2">
+                </motion.button>
+                <motion.button 
+                  whileHover={{ x: 4 }}
+                  onClick={() => { navigate('/settings'); setMenuOpen(false); }} 
+                  className={`flex items-center gap-3 px-4 py-3 rounded-xl font-medium transition-colors ${
+                    scrolled
+                      ? 'text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800'
+                      : 'text-white hover:bg-white/20'
+                  }`}
+                >
+                  <Settings className="w-4 h-4" /> Cài đặt
+                </motion.button>
+                <motion.button 
+                  whileHover={{ x: 4 }}
+                  onClick={handleLogout} 
+                  className="flex items-center gap-3 px-4 py-3 rounded-xl font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                >
                   <LogOut className="w-4 h-4" /> Đăng xuất
-                </button>
+                </motion.button>
               </div>
             </motion.div>
           )}
         </AnimatePresence>
-      </nav>
+      </motion.nav>
 
+      {/* Logout Confirmation Modal */}
       <AnimatePresence>
         {showConfirm && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={cancelLogout}></div>
-            <motion.div initial={{ scale: 0.98, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.98, opacity: 0 }} className="relative bg-white/6 backdrop-blur-md border border-white/10 rounded-2xl p-5 max-w-sm w-full shadow-lg">
-              <h3 className="text-lg font-semibold text-white">Xác nhận đăng xuất</h3>
-              <p className="text-white/80 mt-2">Bạn có chắc chắn muốn đăng xuất khỏi tài khoản này? Các phiên làm việc sẽ bị kết thúc.</p>
-              <div className="mt-4 flex justify-end gap-2">
-                <button onClick={cancelLogout} className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/6 text-white">Hủy</button>
-                <button onClick={confirmLogout} className="px-4 py-2 rounded-lg bg-red-500 hover:bg-red-600 text-white font-semibold">Đăng xuất</button>
+          <motion.div 
+            initial={{ opacity: 0 }} 
+            animate={{ opacity: 1 }} 
+            exit={{ opacity: 0 }} 
+            className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          >
+            <motion.div 
+              initial={{ opacity: 0 }} 
+              animate={{ opacity: 1 }} 
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md" 
+              onClick={cancelLogout}
+            ></motion.div>
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }} 
+              animate={{ scale: 1, opacity: 1, y: 0 }} 
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              transition={{ type: "spring", stiffness: 300, damping: 25 }}
+              className="relative bg-white dark:bg-gray-800 rounded-3xl p-6 max-w-md w-full shadow-2xl border border-gray-200 dark:border-gray-700"
+            >
+              <h3 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">Xác nhận đăng xuất</h3>
+              <p className="text-gray-600 dark:text-gray-400 mb-6">
+                Bạn có chắc chắn muốn đăng xuất? Tất cả phiên làm việc hiện tại sẽ kết thúc.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <motion.button 
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={cancelLogout} 
+                  className="px-6 py-2.5 rounded-xl font-semibold bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-900 dark:text-white transition-colors"
+                >
+                  Hủy
+                </motion.button>
+                <motion.button 
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.98 }}
+                  onClick={confirmLogout} 
+                  className="px-6 py-2.5 rounded-xl font-semibold bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white shadow-lg shadow-red-500/30 transition-all"
+                >
+                  Đăng xuất
+                </motion.button>
               </div>
             </motion.div>
           </motion.div>
