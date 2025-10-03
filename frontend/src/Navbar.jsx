@@ -98,11 +98,11 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
         initial={{ y: -100 }}
         animate={{ y: 0 }}
         transition={{ type: "spring", stiffness: 100, damping: 20 }}
-        className={`fixed top-4 left-1/2 transform -translate-x-1/2 w-[calc(100%-2rem)] max-w-6xl transition-all duration-300 z-50 ${
+        className={`fixed top-4 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-5xl transition-all duration-300 z-50 ${
           scrolled 
             ? 'bg-white/95 dark:bg-gray-900/95 shadow-2xl' 
-            : 'bg-gradient-to-r from-blue-600/90 via-purple-600/90 to-pink-600/90 shadow-xl'
-        } backdrop-blur-xl border border-white/20 rounded-3xl px-6 py-4`}
+            : 'bg-gradient-to-r from-sky-500/80 to-indigo-600/80 shadow-xl'
+        } backdrop-blur-xl border border-white/20 rounded-2xl px-4 py-3`}
       >
         <div className="flex items-center justify-between gap-4">
           {/* Logo Section */}
@@ -117,15 +117,15 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
                 <motion.div 
                   className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all duration-300 ${
                     scrolled 
-                      ? 'bg-gradient-to-br from-blue-500 to-purple-600' 
+                      ? 'bg-gradient-to-br from-sky-500 to-indigo-600' 
                       : 'bg-white/20'
-                  } group-hover:shadow-lg group-hover:shadow-purple-500/50`}
+                  } group-hover:shadow-lg`}
                   whileHover={{ rotate: 360 }}
                   transition={{ duration: 0.6 }}
                 >
                   {renderLogoContent()}
                 </motion.div>
-                <div className="absolute -inset-1 bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl blur opacity-0 group-hover:opacity-30 transition-opacity"></div>
+                <div className="absolute -inset-1 bg-gradient-to-r from-sky-500 to-indigo-600 rounded-2xl blur opacity-0 group-hover:opacity-20 transition-opacity"></div>
               </div>
               <div className="hidden sm:block">
                 <motion.h1 
@@ -192,7 +192,7 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
               >
                 <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold ${
                   scrolled
-                    ? 'bg-gradient-to-br from-blue-500 to-purple-600 text-white'
+                    ? 'bg-gradient-to-br from-sky-500 to-indigo-600 text-white'
                     : 'bg-white/30 text-white'
                 }`}>
                   {initials}
