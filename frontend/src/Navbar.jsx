@@ -98,7 +98,7 @@ export default function Navbar({ isChatPage, theme: controlledTheme, setTheme: s
         initial={{ y: -100 }}
         animate={{ y: 0 }}
         transition={{ type: "spring", stiffness: 100, damping: 20 }}
-        style={{ left: '30%', transform: 'translateX(-30%)' }}
+        style={{ left: '20%', transform: 'translateX(-20%)' }}
         className={`fixed top-4 w-[calc(100%-2rem)] max-w-5xl transition-all duration-300 z-50 ${
           scrolled 
             ? 'bg-white/95 dark:bg-gray-900/95 shadow-2xl' 
