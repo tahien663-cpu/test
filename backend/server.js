@@ -32,12 +32,11 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// Serve static files from the Vite build output (dist folder)
+// Serve static files
 app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), {
   maxAge: '1d'
 }));
 
-// Enable trust proxy for Render
 app.set('trust proxy', 1);
 
 // Security middleware
@@ -48,7 +47,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com", "https://en.wikipedia.org"],
+      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com", "https://en.wikipedia.org", "https://vi.wikipedia.org", "https://searx.be", "https://search.brave.com", "https://api.qwant.com"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -120,7 +119,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '2.0.0',
+    version: '2.1.0',
     endpoints: [
       '/health',
       '/api/register',
@@ -133,8 +132,8 @@ app.get('/', (req, res) => {
     ],
     features: [
       '🧠 Smart auto web search (AI decides when to search)',
-      '⚡ Multi-source search (DuckDuckGo + Wikipedia)',
-      '🎯 Priority source ranking',
+      '⚡ Enhanced multi-source search (DuckDuckGo + Wikipedia EN/VI + SearXNG + Brave + Qwant)',
+      '🎯 Priority source ranking with 20+ domains',
       '⏱️ Optimized speed (<30s guaranteed)',
       '🤖 AI-enhanced prompts (chat & image)',
       '🔒 Secure with rate limiting'
@@ -281,7 +280,7 @@ Search NO for:
     const data = await response.json();
     const decision = data.choices?.[0]?.message?.content?.trim().toUpperCase() || 'NO';
     
-    console.log(`🤖 Search decision: ${decision} for query: "${userMessage}"`);
+    console.log(`🤖 AI Search decision: ${decision} for query: "${userMessage}"`);
     return decision === 'YES';
     
   } catch (error) {
@@ -290,13 +289,13 @@ Search NO for:
   }
 }
 
-// Multi-source web search with parallel requests
+// ENHANCED: Multi-source web search (6 sources, no API keys)
 async function searchWithPrioritySources(query, timeoutMs = 25000) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   
   try {
-    console.log(`🔍 Starting multi-source web search for: "${query}"`);
+    console.log(`🔍 Starting enhanced multi-source web search for: "${query}"`);
     const startTime = Date.now();
     
     const encodedQuery = encodeURIComponent(query);
@@ -304,17 +303,23 @@ async function searchWithPrioritySources(query, timeoutMs = 25000) {
     
     // Priority domains for ranking
     const priorityDomains = [
-      'wikipedia.org', 'vnexpress.net', 'thanhnien.vn', 'tuoitre.vn',
-      'bbc.com', 'reuters.com', 'nytimes.com', 'cnn.com', 'theguardian.com',
-      'stackoverflow.com', 'github.com', 'medium.com'
+      'wikipedia.org', 'britannica.com', 'scholarpedia.org',
+      'vnexpress.net', 'thanhnien.vn', 'tuoitre.vn', 'dantri.com.vn', 'vietnamnet.vn',
+      'bbc.com', 'reuters.com', 'nytimes.com', 'cnn.com', 'theguardian.com', 'apnews.com',
+      'stackoverflow.com', 'github.com', 'medium.com', 'dev.to', 'hackernews.com',
+      'arxiv.org', 'scholar.google.com', 'nature.com', 'sciencedirect.com', 'researchgate.net',
+      'reddit.com', 'quora.com', 'stackexchange.com'
     ];
     
-    // Search Promise 1: DuckDuckGo API
+    // Search 1: DuckDuckGo API
     const duckDuckGoSearch = async () => {
       try {
         const searchUrl = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
         const response = await fetch(searchUrl, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          headers: { 
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+          },
           signal: controller.signal
         });
 
@@ -334,7 +339,7 @@ async function searchWithPrioritySources(query, timeoutMs = 25000) {
         }
         
         if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
-          for (const topic of data.RelatedTopics.slice(0, 6)) {
+          for (const topic of data.RelatedTopics.slice(0, 8)) {
             if (topic.Text && topic.FirstURL) {
               try {
                 const domain = new URL(topic.FirstURL).hostname;
@@ -347,24 +352,23 @@ async function searchWithPrioritySources(query, timeoutMs = 25000) {
                   source: domain,
                   priority: isPriority ? 5 : 1
                 });
-              } catch (urlError) {
-                // Skip invalid URLs
-              }
+              } catch (urlError) {}
             }
           }
         }
         
+        console.log(`✓ DuckDuckGo: Found ${ddgResults.length} results`);
         return ddgResults;
       } catch (error) {
-        console.warn(`DuckDuckGo search failed: ${error.message}`);
+        console.warn(`✗ DuckDuckGo search failed: ${error.message}`);
         return [];
       }
     };
 
-    // Search Promise 2: Wikipedia Direct
+    // Search 2: Wikipedia (English)
     const wikipediaSearch = async () => {
       try {
-        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodedQuery}&format=json&srlimit=3&origin=*`;
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodedQuery}&format=json&srlimit=5&origin=*`;
         const response = await fetch(wikiUrl, { signal: controller.signal });
         
         if (!response.ok) return [];
@@ -379,42 +383,227 @@ async function searchWithPrioritySources(query, timeoutMs = 25000) {
               snippet: item.snippet.replace(/<[^>]*>/g, ''),
               link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
               source: 'wikipedia.org',
-              priority: 8
+              priority: 9
             });
           }
         }
         
+        console.log(`✓ Wikipedia (EN): Found ${wikiResults.length} results`);
         return wikiResults;
       } catch (error) {
-        console.warn(`Wikipedia search failed: ${error.message}`);
+        console.warn(`✗ Wikipedia search failed: ${error.message}`);
         return [];
       }
     };
 
-    // Execute searches in parallel with timeout
-    const [ddgResults, wikiResults] = await Promise.allSettled([
-      Promise.race([duckDuckGoSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('DDG timeout')), 12000))]),
-      Promise.race([wikipediaSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('Wiki timeout')), 12000))])
-    ]);
+    // Search 3: Vietnamese Wikipedia
+    const wikipediaViSearch = async () => {
+      try {
+        const wikiUrl = `https://vi.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodedQuery}&format=json&srlimit=3&origin=*`;
+        const response = await fetch(wikiUrl, { signal: controller.signal });
+        
+        if (!response.ok) return [];
+        
+        const data = await response.json();
+        const wikiResults = [];
+        
+        if (data.query && data.query.search) {
+          for (const item of data.query.search) {
+            wikiResults.push({
+              title: item.title,
+              snippet: item.snippet.replace(/<[^>]*>/g, ''),
+              link: `https://vi.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+              source: 'vi.wikipedia.org',
+              priority: 9
+            });
+          }
+        }
+        
+        console.log(`✓ Wikipedia (VI): Found ${wikiResults.length} results`);
+        return wikiResults;
+      } catch (error) {
+        console.warn(`✗ Vietnamese Wikipedia search failed: ${error.message}`);
+        return [];
+      }
+    };
+
+    // Search 4: SearXNG (Meta-search engine)
+    const searxSearch = async () => {
+      try {
+        const searxUrl = `https://searx.be/search?q=${encodedQuery}&format=json&language=all&categories=general`;
+        const response = await fetch(searxUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+          },
+          signal: controller.signal
+        });
+
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        const searxResults = [];
+        
+        if (data.results && Array.isArray(data.results)) {
+          for (const item of data.results.slice(0, 6)) {
+            try {
+              const url = new URL(item.url);
+              const domain = url.hostname;
+              const isPriority = priorityDomains.some(pd => domain.includes(pd));
+              
+              searxResults.push({
+                title: item.title || 'No title',
+                snippet: item.content || item.title || '',
+                link: item.url,
+                source: domain,
+                priority: isPriority ? 6 : 2
+              });
+            } catch (urlError) {}
+          }
+        }
+        
+        console.log(`✓ SearXNG: Found ${searxResults.length} results`);
+        return searxResults;
+      } catch (error) {
+        console.warn(`✗ SearXNG search failed: ${error.message}`);
+        return [];
+      }
+    };
+
+    // Search 5: Brave Search
+    const braveSearch = async () => {
+      try {
+        const braveUrl = `https://search.brave.com/search?q=${encodedQuery}&source=web`;
+        const response = await fetch(braveUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Referer': 'https://search.brave.com/'
+          },
+          signal: controller.signal
+        });
+
+        if (!response.ok) return [];
+
+        const html = await response.text();
+        const braveResults = [];
+        
+        const resultPattern = /<div[^>]*class="[^"]*snippet[^"]*"[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>.*?<p[^>]*class="[^"]*snippet-description[^"]*"[^>]*>(.*?)<\/p>/gs;
+        
+        let match;
+        let count = 0;
+        
+        while ((match = resultPattern.exec(html)) !== null && count < 5) {
+          try {
+            const link = match[1];
+            const title = match[2].replace(/<[^>]*>/g, '').trim();
+            const snippet = match[3].replace(/<[^>]*>/g, '').trim();
+            
+            if (link && title) {
+              const url = new URL(link);
+              const domain = url.hostname;
+              const isPriority = priorityDomains.some(pd => domain.includes(pd));
+              
+              braveResults.push({
+                title: title,
+                snippet: snippet || title,
+                link: link,
+                source: domain,
+                priority: isPriority ? 7 : 3
+              });
+              count++;
+            }
+          } catch (urlError) {}
+        }
+        
+        console.log(`✓ Brave: Found ${braveResults.length} results`);
+        return braveResults;
+      } catch (error) {
+        console.warn(`✗ Brave search failed: ${error.message}`);
+        return [];
+      }
+    };
+
+    // Search 6: Qwant
+    const qwantSearch = async () => {
+      try {
+        const qwantUrl = `https://api.qwant.com/v3/search/web?q=${encodedQuery}&count=5&locale=en_US&device=desktop&safesearch=1`;
+        const response = await fetch(qwantUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'application/json'
+          },
+          signal: controller.signal
+        });
+
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        const qwantResults = [];
+        
+        if (data.data?.result?.items?.mainline) {
+          for (const section of data.data.result.items.mainline) {
+            if (section.type === 'web' && section.items) {
+              for (const item of section.items.slice(0, 5)) {
+                try {
+                  const url = new URL(item.url);
+                  const domain = url.hostname;
+                  const isPriority = priorityDomains.some(pd => domain.includes(pd));
+                  
+                  qwantResults.push({
+                    title: item.title || 'No title',
+                    snippet: item.desc || item.title || '',
+                    link: item.url,
+                    source: domain,
+                    priority: isPriority ? 5 : 2
+                  });
+                } catch (urlError) {}
+              }
+            }
+          }
+        }
+        
+        console.log(`✓ Qwant: Found ${qwantResults.length} results`);
+        return qwantResults;
+      } catch (error) {
+        console.warn(`✗ Qwant search failed: ${error.message}`);
+        return [];
+      }
+    };
+
+    // Execute all searches in parallel
+    const searchPromises = [
+      Promise.race([duckDuckGoSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('DDG timeout')), 10000))]),
+      Promise.race([wikipediaSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('Wiki EN timeout')), 10000))]),
+      Promise.race([wikipediaViSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('Wiki VI timeout')), 10000))]),
+      Promise.race([searxSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('SearXNG timeout')), 10000))]),
+      Promise.race([braveSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('Brave timeout')), 12000))]),
+      Promise.race([qwantSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('Qwant timeout')), 10000))])
+    ];
+
+    const settledResults = await Promise.allSettled(searchPromises);
 
     // Combine results
-    if (ddgResults.status === 'fulfilled' && ddgResults.value) {
-      results.push(...ddgResults.value);
-    }
-    if (wikiResults.status === 'fulfilled' && wikiResults.value) {
-      results.push(...wikiResults.value);
-    }
+    settledResults.forEach((result, index) => {
+      const sourceName = ['DuckDuckGo', 'Wikipedia (EN)', 'Wikipedia (VI)', 'SearXNG', 'Brave', 'Qwant'][index];
+      if (result.status === 'fulfilled' && result.value && Array.isArray(result.value)) {
+        results.push(...result.value);
+      } else {
+        console.warn(`${sourceName}: ${result.status === 'rejected' ? result.reason.message : 'No results'}`);
+      }
+    });
 
-    // Remove duplicates and sort by priority
+    // Deduplicate and sort
     const uniqueResults = Array.from(
       new Map(results.map(r => [r.link, r])).values()
     );
     
     uniqueResults.sort((a, b) => b.priority - a.priority);
-    const topResults = uniqueResults.slice(0, 8);
+    const topResults = uniqueResults.slice(0, 12);
     
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✓ Multi-source search completed in ${elapsed}s, found ${topResults.length} results`);
+    console.log(`✓ Multi-source search completed in ${elapsed}s, found ${topResults.length} unique results from ${results.length} total`);
     
     clearTimeout(timeout);
     return topResults;
@@ -432,7 +621,7 @@ async function searchWithPrioritySources(query, timeoutMs = 25000) {
   }
 }
 
-// Enhanced AI summarization with concise output and better formatting
+// Enhanced AI summarization
 async function summarizeSearchResults(query, searchResults, timeoutMs = 6000) {
   if (!searchResults || searchResults.length === 0) {
     return 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
@@ -445,10 +634,9 @@ async function summarizeSearchResults(query, searchResults, timeoutMs = 6000) {
     console.log(`🤖 Starting AI summarization for ${searchResults.length} results...`);
     const startTime = Date.now();
     
-    // Format search results for AI - more concise
     const formattedResults = searchResults
-      .slice(0, 6) // Limit to top 6 results for faster processing
-      .map((r, i) => `[${i + 1}] ${r.title}\nSource: ${r.source}\nInfo: ${r.snippet.substring(0, 200)}`)
+      .slice(0, 8)
+      .map((r, i) => `[${i + 1}] ${r.title}\nSource: ${r.source}\nInfo: ${r.snippet.substring(0, 250)}`)
       .join('\n\n');
     
     const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
@@ -499,13 +687,11 @@ STRICT RULES:
     const data = await response.json();
     let summary = data.choices?.[0]?.message?.content?.trim() || 'Không thể tạo tóm tắt từ kết quả tìm kiếm.';
     
-    // Clean up summary formatting
-    summary = summary.replace(/\*\*/g, ''); // Remove bold markdown
+    summary = summary.replace(/\*\*/g, '');
     
-    // Add source references with links
     const sourcesSection = '\n\n---\n**📚 Nguồn:**\n' + 
       searchResults
-        .slice(0, 6)
+        .slice(0, 8)
         .map((r, i) => `[${i + 1}] [${r.source}](${r.link})`)
         .join(' • ');
     
@@ -534,7 +720,6 @@ async function verifyImageWithPolling(imageUrl) {
   const POLL_INTERVAL = 800;
   
   console.log(`Starting smart polling for image: ${imageUrl}`);
-  console.log(`Initial wait: ${INITIAL_DELAY}ms before first check`);
   await new Promise(resolve => setTimeout(resolve, INITIAL_DELAY));
   
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -622,10 +807,14 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '2.0.0',
+      version: '2.1.0',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
-      dependencies: { supabase: 'connected', openRouter: 'connected', webSearch: 'enabled (multi-source)' }
+      dependencies: { 
+        supabase: 'connected', 
+        openRouter: 'connected', 
+        webSearch: 'enabled (6 sources: DuckDuckGo, Wikipedia EN/VI, SearXNG, Brave, Qwant)' 
+      }
     });
   } catch (error) {
     console.error(`Health check failed: ${error.message}`);
@@ -796,18 +985,19 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     let enhancedPromptUsed = false;
     let finalPrompt = userContent;
     let wasWebSearch = false;
+    let searchSourcesUsed = [];
     
     // Check for explicit search keywords OR use AI decision
-    const searchKeywords = ['tìm kiếm web:', 'web search:', 'search:', 'tìm:', 'tra cứu:', 'search web:'];
+    const searchKeywords = ['tìm kiếm web:', 'web search:', 'search:', 'tìm:', 'tra cứu:', 'search web:', 'google:', 'bing:'];
     const hasSearchKeyword = searchKeywords.some(keyword => 
       userContent.toLowerCase().startsWith(keyword.toLowerCase())
     );
     
     let shouldSearch = hasSearchKeyword;
     
-    // If no explicit keyword, let AI decide (parallel with timeout)
+    // If no explicit keyword, let AI decide
     if (!hasSearchKeyword) {
-      console.log(`🤔 No search keyword detected, asking AI for decision...`);
+      console.log(`No search keyword detected, asking AI for decision...`);
       const decisionPromise = shouldSearchWeb(userContent);
       const decisionWithTimeout = Promise.race([
         decisionPromise,
@@ -819,7 +1009,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     if (shouldSearch) {
       wasWebSearch = true;
-      console.log(`🔍 Executing web search (${hasSearchKeyword ? 'keyword' : 'AI decision'})...`);
+      console.log(`Executing enhanced web search (${hasSearchKeyword ? 'keyword' : 'AI decision'})...`);
       
       // Extract query if keyword present
       let searchQuery = userContent;
@@ -834,7 +1024,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       
       console.log(`Search query: "${searchQuery}"`);
       
-      // Execute search with strict 25s timeout
+      // Execute enhanced multi-source search
       const searchResults = await Promise.race([
         searchWithPrioritySources(searchQuery, 25000),
         new Promise((_, reject) => 
@@ -846,8 +1036,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       });
       
       if (searchResults.length > 0) {
-        console.log(`Found ${searchResults.length} results, summarizing...`);
-        // Summarize with 6s timeout
+        searchSourcesUsed = [...new Set(searchResults.map(r => r.source))].slice(0, 5);
+        console.log(`Found ${searchResults.length} results from sources: ${searchSourcesUsed.join(', ')}`);
+        
         aiMessage = await Promise.race([
           summarizeSearchResults(searchQuery, searchResults, 6000),
           new Promise((_, reject) => 
@@ -865,9 +1056,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       
     } else {
       // Regular AI chat (no search)
-      console.log(`💬 Processing as regular chat (no search needed)`);
+      console.log(`Processing as regular chat (no search needed)`);
       
-      // Enhance prompt if provided
       if (prompt) {
         const enhancedResult = await enhancePrompt(userContent, false);
         if (enhancedResult !== userContent) {
@@ -876,7 +1066,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         }
       }
 
-      // Prepare messages for OpenRouter
       const mappedMessages = messages.map(m => ({
         role: m.role === 'ai' ? 'assistant' : m.role,
         content: sanitizeInput(m.content)
@@ -897,7 +1086,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         ...mappedMessages
       ];
 
-      // AI response with timeout
       const response = await Promise.race([
         fetch('https://openrouter.ai/api/v1/chat/completions', {
           method: 'POST',
@@ -932,12 +1120,10 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
     }
 
-    // Calculate total time
     const totalElapsed = ((Date.now() - overallStartTime) / 1000).toFixed(2);
     
-    // Add timing info for web search
     if (wasWebSearch) {
-      aiMessage += `\n\n*⏱️ Total: ${totalElapsed}s*`;
+      aiMessage += `\n\n*⏱️ Total: ${totalElapsed}s | Sources: ${searchSourcesUsed.length}*`;
     }
 
     // Save AI message
@@ -966,7 +1152,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       })
       .eq('id', newChatId);
 
-    console.info(`Chat message processed: chatId=${newChatId}, webSearch=${wasWebSearch}, time=${totalElapsed}s`);
+    console.info(`Chat message processed: chatId=${newChatId}, webSearch=${wasWebSearch}, sources=${searchSourcesUsed.length}, time=${totalElapsed}s`);
     res.json({
       message: aiMessage,
       messageId: savedMessage.id,
@@ -975,7 +1161,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       enhancedPrompt: enhancedPromptUsed ? finalPrompt : undefined,
       originalPrompt: enhancedPromptUsed ? userContent : undefined,
       isWebSearch: wasWebSearch,
-      searchTime: wasWebSearch ? `${totalElapsed}s` : undefined
+      searchTime: wasWebSearch ? `${totalElapsed}s` : undefined,
+      searchSources: wasWebSearch ? searchSourcesUsed : undefined
     });
   } catch (err) {
     console.error(`Chat endpoint error: ${err.message}`);
@@ -983,7 +1170,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
-// Generate image endpoint - OPTIMIZED with Proxy
+// Generate image endpoint
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -1042,7 +1229,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
         timestamp: new Date().toISOString()
       }]);
 
-    // Enhance prompt
     console.log(`Enhancing prompt with AI...`);
     const startTime = Date.now();
     
@@ -1050,7 +1236,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     const encodedPrompt = encodeURIComponent(enhancedPrompt);
     const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
 
-    // Fetch the image to proxy
     console.log(`Fetching image from: ${imageUrl}`);
     const imageResponse = await fetch(imageUrl, {
       method: 'GET',
@@ -1070,7 +1255,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       return res.status(500).json({ error: 'Invalid image response', code: 'INVALID_IMAGE_RESPONSE' });
     }
 
-    // Optionally store the image in Supabase storage
     const imageId = uuidv4();
     const imageBuffer = await imageResponse.buffer();
     let finalImageUrl = imageUrl;
@@ -1087,13 +1271,10 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     } else {
       const { data: signedUrlData } = await supabase.storage
         .from('images')
-        .createSignedUrl(`public/${imageId}.png`, 60 * 60 * 24); // 1-day expiration
+        .createSignedUrl(`public/${imageId}.png`, 60 * 60 * 24);
       finalImageUrl = signedUrlData?.signedUrl || imageUrl;
     }
 
-    console.info(`Generated image URL with enhanced prompt`);
-
-    // Smart polling (optional, since we already fetched the image)
     console.log(`Starting smart polling verification...`);
     const verificationResult = await verifyImageWithPolling(finalImageUrl);
     const totalTime = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -1104,7 +1285,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
     console.log(`${verificationResult.success ? '✓' : '✗'} Image process completed in ${totalTime}s`);
 
-    // Save AI message
     const messageContent = verificationResult.success 
       ? `![Generated Image](${finalImageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Verified in ${totalTime}s (${verificationResult.attempts} checks)*`
       : `![Generated Image](${finalImageUrl})\n\n*Enhanced prompt: ${enhancedPrompt}*\n*Generated in ${totalTime}s (verification skipped)*`;
@@ -1125,7 +1305,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       return res.status(500).json({ error: 'Failed to save message', code: 'DATABASE_ERROR' });
     }
 
-    // Update chat
     await supabase
       .from('chats')
       .update({
@@ -1272,7 +1451,6 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
       return res.status(500).json({ error: 'Failed to delete message', code: 'DATABASE_ERROR', details: process.env.NODE_ENV === 'development' ? deleteError.message : undefined });
     }
 
-    // Update chat's last_message
     const { data: lastMessage, error: lastMessageError } = await supabase
       .from('messages')
       .select('content')
@@ -1305,7 +1483,6 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
 
 // Catch-all handler for SPA routing
 app.get('*', (req, res) => {
-  // Skip API routes
   if (req.path.startsWith('/api/')) {
     return res.status(404).json({ error: 'API endpoint not found', code: 'NOT_FOUND' });
   }
@@ -1342,13 +1519,26 @@ app.use((err, req, res, next) => {
 
 // Graceful shutdown
 const server = app.listen(process.env.PORT || 3001, () => {
-  console.info(`Server started on port ${process.env.PORT || 3001}`);
+  console.info(`========================================`);
+  console.info(`🚀 Server started on port ${process.env.PORT || 3001}`);
+  console.info(`========================================`);
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
-  console.info(`Smart auto web search: enabled (AI-powered decisions)`);
-  console.info(`Multi-source search: DuckDuckGo + Wikipedia`);
-  console.info(`Search timeout: <30s guaranteed`);
-  console.info(`AI-enhanced prompts: enabled (chat and image)`);
+  console.info(`\n🔍 Enhanced Multi-Source Web Search: ENABLED`);
+  console.info(`   └─ Sources: DuckDuckGo, Wikipedia (EN/VI), SearXNG, Brave, Qwant`);
+  console.info(`   └─ Priority domains: 20+ sources tracked`);
+  console.info(`   └─ Search timeout: <30s guaranteed`);
+  console.info(`   └─ No API keys required - 100% free!`);
+  console.info(`\n🤖 AI Features:`);
+  console.info(`   └─ Smart auto web search (AI-powered decisions)`);
+  console.info(`   └─ Enhanced prompts (chat & image)`);
+  console.info(`   └─ Multi-language support`);
+  console.info(`\n🔒 Security:`);
+  console.info(`   └─ Rate limiting enabled`);
+  console.info(`   └─ Helmet security headers`);
+  console.info(`   └─ Input sanitization`);
+  console.info(`\nVersion: 2.1.0 - No API Keys Edition`);
+  console.info(`========================================\n`);
 });
 
 process.on('SIGTERM', () => {
