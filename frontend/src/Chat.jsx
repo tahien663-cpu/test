@@ -322,7 +322,7 @@ const Sidebar = ({ isOpen, onClose, theme, onThemeToggle, chatHistory, currentCh
                   {date}
                 </h3>
                 <div className="space-y-1">
-                  {chats.filter(chat => (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())).map(chat => (
+                  {chats.map(chat => (
                     <ChatHistoryItem
                       key={chat.id}
                       chat={chat}
@@ -694,11 +694,16 @@ export default function Chat() {
     e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
   }, []);
 
-  const filteredHistory = useMemo(() => 
-    chatHistory.filter(chat =>
-      (chat.title || '').toLowerCase().includes(searchTerm.toLowerCase())
-    ), [chatHistory, searchTerm]
-  );
+  const filteredHistory = useMemo(() => {
+    const term = (searchTerm || '').toLowerCase().trim();
+    if (!term) return chatHistory;
+
+    return chatHistory.filter(chat => {
+      const title = (chat.title || '').toLowerCase();
+      const last = (chat.last_message || '').toLowerCase();
+      return title.includes(term) || last.includes(term);
+    });
+  }, [chatHistory, searchTerm]);
 
   const handleChatSelect = useCallback((chatId) => {
     loadChat(chatId);
@@ -897,7 +902,7 @@ export default function Chat() {
               theme === 'dark' ? 'text-gray-400' : 'text-gray-500'
             }`}>
               <span className="hidden md:inline">Enter để gửi • Shift+Enter để xuống dòng</span>
-              <span className="md:hidden">Enter gửi • Shift+Enter xuống dòng</span>
+              <span className="md:hidden">Enter gửi</span>
               <span className={input.length > 450 ? 'text-red-500 font-medium' : ''}>
                 {input.length}/500
               </span>
@@ -907,4 +912,4 @@ export default function Chat() {
       </div>
     </div>
   );
-} 
+}
