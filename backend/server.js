@@ -63,6 +63,9 @@ const AI_MODELS = {
 // Model performance tracking
 const modelStats = new Map();
 
+// Rate limit tracking per model
+const rateLimitTracker = new Map();
+
 function initModelStats() {
   for (const category in AI_MODELS) {
     AI_MODELS[category].forEach(model => {
@@ -72,11 +75,59 @@ function initModelStats() {
         avgResponseTime: 0,
         lastUsed: null
       });
+      
+      rateLimitTracker.set(model.id, {
+        isRateLimited: false,
+        rateLimitUntil: null,
+        consecutiveErrors: 0
+      });
     });
   }
 }
 
 initModelStats();
+
+// Check if model is currently rate limited
+function isModelRateLimited(modelId) {
+  const tracker = rateLimitTracker.get(modelId);
+  if (!tracker || !tracker.isRateLimited) return false;
+  
+  if (tracker.rateLimitUntil && Date.now() < tracker.rateLimitUntil) {
+    return true;
+  }
+  
+  // Reset if time has passed
+  tracker.isRateLimited = false;
+  tracker.rateLimitUntil = null;
+  tracker.consecutiveErrors = 0;
+  rateLimitTracker.set(modelId, tracker);
+  return false;
+}
+
+// Mark model as rate limited
+function markModelRateLimited(modelId, retryAfterSeconds) {
+  const tracker = rateLimitTracker.get(modelId) || {
+    isRateLimited: false,
+    rateLimitUntil: null,
+    consecutiveErrors: 0
+  };
+  
+  tracker.isRateLimited = true;
+  tracker.rateLimitUntil = Date.now() + (retryAfterSeconds * 1000);
+  tracker.consecutiveErrors++;
+  
+  rateLimitTracker.set(modelId, tracker);
+  console.warn(`⚠️ Model ${modelId} rate limited until ${new Date(tracker.rateLimitUntil).toISOString()}`);
+}
+
+// Parse retry-after from error message
+function parseRetryAfter(errorMessage) {
+  const match = errorMessage.match(/try again (\d+) seconds later/i);
+  if (match && match[1]) {
+    return parseInt(match[1]);
+  }
+  return 60; // Default 60 seconds
+}
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), {
@@ -234,11 +285,19 @@ function updateModelStats(modelId, success, responseTime) {
   modelStats.set(modelId, stats);
 }
 
-// Get sorted models by performance
+// Get sorted models by performance (excluding rate-limited ones)
 function getSortedModels(category) {
   const models = AI_MODELS[category] || AI_MODELS.chat;
   
-  return models.sort((a, b) => {
+  // Filter out rate-limited models
+  const availableModels = models.filter(model => !isModelRateLimited(model.id));
+  
+  if (availableModels.length === 0) {
+    console.warn(`⚠️ All models in category ${category} are rate limited! Using all models anyway...`);
+    return models; // Return all if none available (last resort)
+  }
+  
+  return availableModels.sort((a, b) => {
     const statsA = modelStats.get(a.id) || { successCount: 0, failCount: 0, avgResponseTime: Infinity };
     const statsB = modelStats.get(b.id) || { successCount: 0, failCount: 0, avgResponseTime: Infinity };
     
@@ -253,7 +312,7 @@ function getSortedModels(category) {
   });
 }
 
-// ENHANCED: Parallel model racing with fallback
+// ENHANCED: Parallel model racing with fallback and rate limit handling
 async function callAIWithRacing(messages, category = 'chat', options = {}) {
   const models = getSortedModels(category);
   const { 
@@ -263,11 +322,16 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
     fallbackAll = false 
   } = options;
   
-  console.log(`🏁 Starting AI race with ${raceCount} models from category: ${category}`);
+  console.log(`🏁 Starting AI race with ${Math.min(raceCount, models.length)} models from category: ${category}`);
   
-  // First wave: Race top models
-  const raceModels = models.slice(0, raceCount);
-  const racePromises = raceModels.map(model => {
+  // First wave: Race top models (skip rate-limited ones)
+  const availableRaceModels = models.slice(0, raceCount);
+  
+  if (availableRaceModels.length === 0) {
+    throw new Error('No available models to race');
+  }
+  
+  const racePromises = availableRaceModels.map(model => {
     const startTime = Date.now();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), model.timeout);
@@ -293,6 +357,16 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
       const responseTime = Date.now() - startTime;
       
       if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        
+        // Check for rate limit error
+        if (response.status === 429 || errorText.includes('rate limit') || errorText.includes('Rate limit')) {
+          const retryAfter = parseRetryAfter(errorText);
+          markModelRateLimited(model.id, retryAfter);
+          updateModelStats(model.id, false, responseTime);
+          throw new Error(`${model.id} rate limited (retry after ${retryAfter}s)`);
+        }
+        
         updateModelStats(model.id, false, responseTime);
         throw new Error(`${model.id} failed: ${response.status}`);
       }
@@ -318,7 +392,11 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
     .catch(error => {
       clearTimeout(timeout);
       const responseTime = Date.now() - startTime;
-      updateModelStats(model.id, false, responseTime);
+      
+      if (!error.message.includes('rate limited')) {
+        updateModelStats(model.id, false, responseTime);
+      }
+      
       console.warn(`✗ ${model.id}: ${error.message}`);
       throw error;
     });
@@ -329,14 +407,19 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
     const result = await Promise.race(racePromises);
     return result;
   } catch (error) {
-    console.warn(`First wave failed, trying fallback models...`);
+    console.warn(`First wave failed: ${error.message}, trying fallback models...`);
     
     // Fallback: Try remaining models sequentially or all if requested
     const fallbackModels = models.slice(raceCount);
     
-    if (fallbackAll) {
+    if (fallbackAll && fallbackModels.length > 0) {
       // Try all remaining models in parallel
       const fallbackPromises = fallbackModels.map(async model => {
+        // Skip if rate limited
+        if (isModelRateLimited(model.id)) {
+          throw new Error(`${model.id} is rate limited`);
+        }
+        
         const startTime = Date.now();
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), model.timeout);
@@ -363,6 +446,15 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
           const responseTime = Date.now() - startTime;
           
           if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            
+            if (response.status === 429 || errorText.includes('rate limit') || errorText.includes('Rate limit')) {
+              const retryAfter = parseRetryAfter(errorText);
+              markModelRateLimited(model.id, retryAfter);
+              updateModelStats(model.id, false, responseTime);
+              throw new Error(`Rate limited (retry after ${retryAfter}s)`);
+            }
+            
             updateModelStats(model.id, false, responseTime);
             throw new Error(`Failed: ${response.status}`);
           }
@@ -394,6 +486,12 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
     } else {
       // Try remaining models one by one
       for (const model of fallbackModels) {
+        // Skip if rate limited
+        if (isModelRateLimited(model.id)) {
+          console.warn(`⏭️ Skipping ${model.id} (rate limited)`);
+          continue;
+        }
+        
         const startTime = Date.now();
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), model.timeout);
@@ -420,6 +518,16 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
           const responseTime = Date.now() - startTime;
           
           if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            
+            if (response.status === 429 || errorText.includes('rate limit') || errorText.includes('Rate limit')) {
+              const retryAfter = parseRetryAfter(errorText);
+              markModelRateLimited(model.id, retryAfter);
+              updateModelStats(model.id, false, responseTime);
+              console.warn(`⚠️ ${model.id} rate limited, trying next model...`);
+              continue;
+            }
+            
             updateModelStats(model.id, false, responseTime);
             continue;
           }
@@ -449,11 +557,11 @@ async function callAIWithRacing(messages, category = 'chat', options = {}) {
       }
     }
     
-    throw new Error('All AI models failed to respond');
+    throw new Error('All AI models failed or are rate limited');
   }
 }
 
-// Enhance prompt using AI with racing
+// Enhance prompt using AI with sequential testing
 async function enhancePrompt(userPrompt, isImagePrompt = false) {
   try {
     console.log(`Starting prompt enhancement for: "${userPrompt}" (Image: ${isImagePrompt})`);
@@ -467,10 +575,9 @@ async function enhancePrompt(userPrompt, isImagePrompt = false) {
       { role: 'user', content: `Enhance this prompt: "${userPrompt}"` }
     ];
 
-    const result = await callAIWithRacing(enhanceMessages, 'quick', {
+    const result = await callAISequential(enhanceMessages, 'quick', {
       temperature: 0.7,
-      maxTokens: isImagePrompt ? 100 : 200,
-      raceCount: 2
+      maxTokens: isImagePrompt ? 100 : 200
     });
     
     const enhancedPrompt = result.content.trim() || userPrompt;
@@ -516,10 +623,9 @@ Search NO for:
       }
     ];
 
-    const result = await callAIWithRacing(decisionPrompt, 'quick', {
+    const result = await callAISequential(decisionPrompt, 'quick', {
       temperature: 0.1,
-      maxTokens: 10,
-      raceCount: 2
+      maxTokens: 10
     });
     
     const decision = result.content.trim().toUpperCase();
@@ -863,7 +969,7 @@ async function searchWithPrioritySources(query, timeoutMs = 25000) {
   }
 }
 
-// Enhanced AI summarization with research model
+// Enhanced AI summarization with research model (sequential)
 async function summarizeSearchResults(query, searchResults, timeoutMs = 8000) {
   if (!searchResults || searchResults.length === 0) {
     return 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
@@ -900,21 +1006,20 @@ STRICT RULES:
       }
     ];
 
-    // Use research model for web search summarization
-    const result = await callAIWithRacing(summaryMessages, 'research', {
-      temperature: 0.2,
-      maxTokens: 350,
-      raceCount: 1,
-      fallbackAll: true
-    }).catch(async () => {
-      // Fallback to chat models if research model fails
-      console.warn('Research model failed, falling back to chat models');
-      return await callAIWithRacing(summaryMessages, 'chat', {
+    // Use research model first, then fallback to chat models
+    let result;
+    try {
+      result = await callAISequential(summaryMessages, 'research', {
         temperature: 0.2,
-        maxTokens: 350,
-        raceCount: 3
+        maxTokens: 350
       });
-    });
+    } catch (error) {
+      console.warn('Research model failed, falling back to chat models');
+      result = await callAISequential(summaryMessages, 'chat', {
+        temperature: 0.2,
+        maxTokens: 350
+      });
+    }
     
     let summary = result.content.trim() || 'Không thể tạo tóm tắt từ kết quả tìm kiếm.';
     summary = summary.replace(/\*\*/g, '');
@@ -923,6 +1028,30 @@ STRICT RULES:
       searchResults
         .slice(0, 8)
         .map((r, i) => `[${i + 1}] [${r.source}](${r.link})`)
+        .join(' • ');
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✓ Summarization by ${result.modelId} completed in ${elapsed}s`);
+    
+    return summary + sourcesSection;
+    
+  } catch (error) {
+    console.error(`Summarization error: ${error.message}`);
+    return 'Không thể tạo tóm tắt. Vui lòng thử lại.';
+  }
+}
+        .join(' • ');
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✓ Summarization by ${result.modelId} completed in ${elapsed}s`);
+    
+    return summary + sourcesSection;
+    
+  } catch (error) {
+    console.error(`Summarization error: ${error.message}`);
+    return 'Không thể tạo tóm tắt. Vui lòng thử lại.';
+  }
+}
         .join(' • ');
     
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -1053,24 +1182,40 @@ app.get('/health', async (req, res) => {
 // Model stats endpoint
 app.get('/api/model-stats', (req, res) => {
   const stats = {};
+  const categories = {};
+  
   for (const [modelId, data] of modelStats.entries()) {
     const total = data.successCount + data.failCount;
+    const rateLimitInfo = rateLimitTracker.get(modelId);
+    
     stats[modelId] = {
       successRate: total > 0 ? ((data.successCount / total) * 100).toFixed(1) + '%' : 'N/A',
       avgResponseTime: data.avgResponseTime > 0 ? data.avgResponseTime.toFixed(0) + 'ms' : 'N/A',
       totalCalls: total,
-      lastUsed: data.lastUsed ? new Date(data.lastUsed).toISOString() : 'Never'
+      successCalls: data.successCount,
+      failCalls: data.failCount,
+      lastUsed: data.lastUsed ? new Date(data.lastUsed).toISOString() : 'Never',
+      isRateLimited: rateLimitInfo?.isRateLimited || false,
+      rateLimitUntil: rateLimitInfo?.rateLimitUntil ? new Date(rateLimitInfo.rateLimitUntil).toISOString() : null
     };
+  }
+  
+  // Show sorted order for each category
+  for (const [category, models] of Object.entries(AI_MODELS)) {
+    const sorted = getSortedModels(category);
+    categories[category] = sorted.map(m => ({
+      id: m.id,
+      position: sorted.indexOf(m) + 1,
+      avgResponseTime: modelStats.get(m.id)?.avgResponseTime?.toFixed(0) + 'ms' || 'N/A',
+      successRate: stats[m.id]?.successRate || 'N/A',
+      isRateLimited: stats[m.id]?.isRateLimited || false
+    }));
   }
   
   res.json({
     modelStats: stats,
-    categories: {
-      chat: AI_MODELS.chat.map(m => m.id),
-      reasoning: AI_MODELS.reasoning.map(m => m.id),
-      research: AI_MODELS.research.map(m => m.id),
-      quick: AI_MODELS.quick.map(m => m.id)
-    }
+    sortedCategories: categories,
+    info: 'Models are automatically sorted by performance (success rate + speed). Fastest & most reliable models appear first.'
   });
 });
 
@@ -1292,7 +1437,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
       
     } else {
-      // Regular AI chat (no search) with multi-model racing
+      // Regular AI chat (no search) with sequential model testing
       console.log(`Processing as regular chat (no search needed)`);
       
       if (prompt) {
@@ -1324,11 +1469,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       ];
 
       try {
-        const result = await callAIWithRacing(messagesWithSystem, 'chat', {
+        const result = await callAISequential(messagesWithSystem, 'chat', {
           temperature: 0.7,
-          maxTokens: 500,
-          raceCount: 3,
-          fallbackAll: true
+          maxTokens: 500
         });
         
         aiMessage = result.content;
@@ -1348,6 +1491,12 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     if (wasWebSearch) {
       aiMessage += `\n\n*⏱️ Total: ${totalElapsed}s | Sources: ${searchSourcesUsed.length}*`;
     } else {
+      const modelStats = getSortedModels('chat').map(m => {
+        const stats = modelStats.get(m.id);
+        if (!stats || stats.successCount === 0) return null;
+        return `${m.id.split('/')[1]}: ${stats.avgResponseTime.toFixed(0)}ms`;
+      }).filter(Boolean).slice(0, 3);
+      
       aiMessage += `\n\n*🤖 Model: ${usedModel} | ⏱️ ${totalElapsed}s*`;
     }
 
@@ -1750,25 +1899,26 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`========================================`);
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
-  console.info(`\n🤖 Multi-Model AI System: ENABLED`);
-  console.info(`   ├─ Chat models: ${AI_MODELS.chat.length} (parallel racing)`);
+  console.info(`\n🤖 Self-Learning AI System: ENABLED`);
+  console.info(`   ├─ Chat models: ${AI_MODELS.chat.length} (sequential testing)`);
   console.info(`   ├─ Reasoning models: ${AI_MODELS.reasoning.length}`);
   console.info(`   ├─ Research model: ${AI_MODELS.research.length} (web search)`);
   console.info(`   └─ Quick models: ${AI_MODELS.quick.length} (decisions & prompts)`);
+  console.info(`\n⚡ Performance Features:`);
+  console.info(`   └─ Sequential model testing (one-by-one)`);
+  console.info(`   └─ Auto-learning: tracks speed & success rate`);
+  console.info(`   └─ Smart sorting: fastest models first`);
+  console.info(`   └─ Rate limit protection & auto-skip`);
   console.info(`\n🔍 Enhanced Multi-Source Web Search: ENABLED`);
   console.info(`   └─ Sources: DuckDuckGo, Wikipedia (EN/VI), SearXNG, Brave, Qwant`);
   console.info(`   └─ Priority domains: 20+ sources tracked`);
   console.info(`   └─ Search timeout: <30s guaranteed`);
-  console.info(`\n⚡ Performance Features:`);
-  console.info(`   └─ Parallel model racing (fastest wins)`);
-  console.info(`   └─ Automatic fallback on failure`);
-  console.info(`   └─ Performance tracking & optimization`);
-  console.info(`   └─ Smart model selection`);
   console.info(`\n🔒 Security:`);
   console.info(`   └─ Rate limiting enabled`);
   console.info(`   └─ Helmet security headers`);
   console.info(`   └─ Input sanitization`);
-  console.info(`\nVersion: 3.0.0 - Multi-Model Racing Edition`);
+  console.info(`\n📊 Monitor performance at: GET /api/model-stats`);
+  console.info(`\nVersion: 3.0.0 - Self-Learning Sequential Edition`);
   console.info(`========================================\n`);
 });
 
