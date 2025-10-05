@@ -18,11 +18,10 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Validate environment variables
 const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
-    console.error(`Missing required environment variable: ${envVar}`);
+    console.error(`Missing: ${envVar}`);
     process.exit(1);
   }
 }
@@ -32,145 +31,92 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// AI Model configurations - OPTIMIZED for speed
 const AI_MODELS = {
   chat: [
-    { id: 'google/gemini-2.0-flash-exp:free', priority: 1, timeout: 8000 },
-    { id: 'qwen/qwen3-4b:free', priority: 2, timeout: 8000 },
-    { id: 'deepseek/deepseek-chat-v3.1:free', priority: 3, timeout: 12000 },
-    { id: 'meta-llama/llama-3.3-8b-instruct:free', priority: 4, timeout: 12000 },
+    { id: 'google/gemini-2.0-flash-exp:free', timeout: 8000 },
+    { id: 'qwen/qwen3-4b:free', timeout: 8000 },
+    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 12000 },
+    { id: 'meta-llama/llama-3.3-8b-instruct:free', timeout: 12000 }
   ],
   quick: [
-    { id: 'qwen/qwen3-4b:free', priority: 1, timeout: 6000 },
-    { id: 'google/gemini-2.0-flash-exp:free', priority: 2, timeout: 7000 },
+    { id: 'qwen/qwen3-4b:free', timeout: 6000 },
+    { id: 'google/gemini-2.0-flash-exp:free', timeout: 7000 }
   ],
-  research: [
-    { id: 'alibaba/tongyi-deepresearch-30b-a3b:free', priority: 1, timeout: 20000 }
-  ]
+  research: [{ id: 'alibaba/tongyi-deepresearch-30b-a3b:free', timeout: 20000 }]
 };
 
-// Model performance tracking
 const modelStats = new Map();
 const rateLimitTracker = new Map();
 
 function initModelStats() {
-  for (const category in AI_MODELS) {
-    AI_MODELS[category].forEach(model => {
-      modelStats.set(model.id, {
-        successCount: 0,
-        failCount: 0,
-        avgResponseTime: 0,
-        lastUsed: null
-      });
-      
-      rateLimitTracker.set(model.id, {
-        isRateLimited: false,
-        rateLimitUntil: null,
-        consecutiveErrors: 0
-      });
+  for (const cat in AI_MODELS) {
+    AI_MODELS[cat].forEach(m => {
+      modelStats.set(m.id, { successCount: 0, failCount: 0, avgResponseTime: 0, lastUsed: null });
+      rateLimitTracker.set(m.id, { isRateLimited: false, rateLimitUntil: null });
     });
   }
 }
-
 initModelStats();
 
-// Check if model is rate limited
-function isModelRateLimited(modelId) {
-  const tracker = rateLimitTracker.get(modelId);
-  if (!tracker || !tracker.isRateLimited) return false;
-  
-  if (tracker.rateLimitUntil && Date.now() < tracker.rateLimitUntil) {
-    return true;
-  }
-  
-  tracker.isRateLimited = false;
-  tracker.rateLimitUntil = null;
-  tracker.consecutiveErrors = 0;
-  rateLimitTracker.set(modelId, tracker);
+function isModelRateLimited(id) {
+  const t = rateLimitTracker.get(id);
+  if (!t || !t.isRateLimited) return false;
+  if (t.rateLimitUntil && Date.now() < t.rateLimitUntil) return true;
+  t.isRateLimited = false;
+  t.rateLimitUntil = null;
+  rateLimitTracker.set(id, t);
   return false;
 }
 
-// Mark model as rate limited
-function markModelRateLimited(modelId, retryAfterSeconds) {
-  const tracker = rateLimitTracker.get(modelId) || {
-    isRateLimited: false,
-    rateLimitUntil: null,
-    consecutiveErrors: 0
-  };
-  
-  tracker.isRateLimited = true;
-  tracker.rateLimitUntil = Date.now() + (retryAfterSeconds * 1000);
-  tracker.consecutiveErrors++;
-  
-  rateLimitTracker.set(modelId, tracker);
-  console.warn(`⚠️ Model ${modelId} rate limited until ${new Date(tracker.rateLimitUntil).toISOString()}`);
+function markModelRateLimited(id, secs) {
+  const t = rateLimitTracker.get(id) || {};
+  t.isRateLimited = true;
+  t.rateLimitUntil = Date.now() + secs * 1000;
+  rateLimitTracker.set(id, t);
 }
 
-// Parse retry-after from error
-function parseRetryAfter(errorMessage) {
-  const match = errorMessage.match(/try again (\d+) seconds later/i);
-  return match && match[1] ? parseInt(match[1]) : 60;
+function parseRetryAfter(msg) {
+  const m = msg.match(/(\d+) seconds/i);
+  return m ? parseInt(m[1]) : 60;
 }
 
-// Update model statistics
-function updateModelStats(modelId, success, responseTime) {
-  const stats = modelStats.get(modelId);
-  if (!stats) return;
-  
-  if (success) {
-    stats.successCount++;
-    stats.avgResponseTime = stats.avgResponseTime === 0 
-      ? responseTime 
-      : (stats.avgResponseTime * 0.7 + responseTime * 0.3);
-  } else {
-    stats.failCount++;
-  }
-  
-  stats.lastUsed = Date.now();
-  modelStats.set(modelId, stats);
+function updateModelStats(id, ok, time) {
+  const s = modelStats.get(id);
+  if (!s) return;
+  if (ok) {
+    s.successCount++;
+    s.avgResponseTime = s.avgResponseTime === 0 ? time : s.avgResponseTime * 0.7 + time * 0.3;
+  } else s.failCount++;
+  s.lastUsed = Date.now();
+  modelStats.set(id, s);
 }
 
-// Get sorted models by performance
-function getSortedModels(category) {
-  const models = AI_MODELS[category] || AI_MODELS.chat;
-  const availableModels = models.filter(model => !isModelRateLimited(model.id));
-  
-  if (availableModels.length === 0) {
-    console.warn(`⚠️ All models in ${category} rate limited, using all anyway`);
-    return models;
-  }
-  
-  return availableModels.sort((a, b) => {
-    const statsA = modelStats.get(a.id) || { successCount: 0, failCount: 0, avgResponseTime: Infinity };
-    const statsB = modelStats.get(b.id) || { successCount: 0, failCount: 0, avgResponseTime: Infinity };
-    
-    const scoreA = statsA.successCount / Math.max(1, statsA.successCount + statsA.failCount);
-    const scoreB = statsB.successCount / Math.max(1, statsB.successCount + statsB.failCount);
-    
-    if (Math.abs(scoreA - scoreB) > 0.1) return scoreB - scoreA;
-    return statsA.avgResponseTime - statsB.avgResponseTime;
+function getSortedModels(cat) {
+  const ms = AI_MODELS[cat] || AI_MODELS.chat;
+  const avail = ms.filter(m => !isModelRateLimited(m.id));
+  if (!avail.length) return ms;
+  return avail.sort((a, b) => {
+    const sa = modelStats.get(a.id) || { successCount: 0, failCount: 0, avgResponseTime: 9999 };
+    const sb = modelStats.get(b.id) || { successCount: 0, failCount: 0, avgResponseTime: 9999 };
+    const ra = sa.successCount / Math.max(1, sa.successCount + sa.failCount);
+    const rb = sb.successCount / Math.max(1, sb.successCount + sb.failCount);
+    if (Math.abs(ra - rb) > 0.1) return rb - ra;
+    return sa.avgResponseTime - sb.avgResponseTime;
   });
 }
 
-// FIXED: Sequential AI call with proper error handling
-async function callAISequential(messages, category = 'chat', options = {}) {
-  const models = getSortedModels(category);
-  const { temperature = 0.7, maxTokens = 500 } = options;
+async function callAISequential(msgs, cat = 'chat', opts = {}) {
+  const ms = getSortedModels(cat);
+  const { temperature = 0.7, maxTokens = 500 } = opts;
   
-  console.log(`🔄 Sequential AI call: trying ${models.length} models from ${category}`);
-  
-  for (const model of models) {
-    if (isModelRateLimited(model.id)) {
-      console.warn(`⏭️ Skipping ${model.id} (rate limited)`);
-      continue;
-    }
-    
-    const startTime = Date.now();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), model.timeout);
+  for (const m of ms) {
+    if (isModelRateLimited(m.id)) continue;
+    const t0 = Date.now();
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), m.timeout);
     
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${openRouterKey}`,
@@ -178,84 +124,53 @@ async function callAISequential(messages, category = 'chat', options = {}) {
           'HTTP-Referer': 'https://hein1.onrender.com',
           'X-Title': 'Hein AI'
         },
-        body: JSON.stringify({
-          model: model.id,
-          messages,
-          temperature,
-          max_tokens: maxTokens
-        }),
-        signal: controller.signal
+        body: JSON.stringify({ model: m.id, messages: msgs, temperature, max_tokens: maxTokens }),
+        signal: ctrl.signal
       });
       
-      clearTimeout(timeout);
-      const responseTime = Date.now() - startTime;
+      clearTimeout(to);
+      const dt = Date.now() - t0;
       
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        
-        if (response.status === 429 || errorText.includes('rate limit')) {
-          const retryAfter = parseRetryAfter(errorText);
-          markModelRateLimited(model.id, retryAfter);
-          updateModelStats(model.id, false, responseTime);
-          console.warn(`⚠️ ${model.id} rate limited, trying next...`);
+      if (!r.ok) {
+        const err = await r.text().catch(() => '');
+        if (r.status === 429 || err.includes('rate limit')) {
+          markModelRateLimited(m.id, parseRetryAfter(err));
+          updateModelStats(m.id, false, dt);
           continue;
         }
-        
-        updateModelStats(model.id, false, responseTime);
-        console.warn(`✗ ${model.id} failed: ${response.status}`);
+        updateModelStats(m.id, false, dt);
         continue;
       }
       
-      const data = await response.json();
+      const data = await r.json();
       const content = data.choices?.[0]?.message?.content;
-      
       if (!content) {
-        updateModelStats(model.id, false, responseTime);
-        console.warn(`✗ ${model.id} returned empty response`);
+        updateModelStats(m.id, false, dt);
         continue;
       }
       
-      updateModelStats(model.id, true, responseTime);
-      console.log(`✓ ${model.id} succeeded in ${responseTime}ms`);
-      
-      return {
-        content,
-        modelId: model.id,
-        responseTime,
-        success: true
-      };
-    } catch (error) {
-      clearTimeout(timeout);
-      const responseTime = Date.now() - startTime;
-      
-      if (error.name !== 'AbortError' && !error.message.includes('rate limited')) {
-        updateModelStats(model.id, false, responseTime);
-      }
-      
-      console.warn(`✗ ${model.id}: ${error.message}`);
+      updateModelStats(m.id, true, dt);
+      return { content, modelId: m.id, responseTime: dt };
+    } catch (e) {
+      clearTimeout(to);
+      if (e.name !== 'AbortError') updateModelStats(m.id, false, Date.now() - t0);
       continue;
     }
   }
-  
-  throw new Error('All AI models failed or are rate limited');
+  throw new Error('All models failed');
 }
 
-// OPTIMIZED: Parallel racing for faster response (2 models max)
-async function callAIRacing(messages, category = 'chat', options = {}) {
-  const models = getSortedModels(category);
-  const { temperature = 0.7, maxTokens = 500 } = options;
+async function callAIRacing(msgs, cat = 'chat', opts = {}) {
+  const ms = getSortedModels(cat).slice(0, 2);
+  const { temperature = 0.7, maxTokens = 500 } = opts;
   
-  // Race only top 2 fastest models
-  const raceModels = models.slice(0, 2);
-  console.log(`🏁 Racing ${raceModels.length} models: ${raceModels.map(m => m.id).join(', ')}`);
-  
-  const racePromises = raceModels.map(async model => {
-    const startTime = Date.now();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), model.timeout);
+  const races = ms.map(async m => {
+    const t0 = Date.now();
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), m.timeout);
     
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${openRouterKey}`,
@@ -263,724 +178,449 @@ async function callAIRacing(messages, category = 'chat', options = {}) {
           'HTTP-Referer': 'https://hein1.onrender.com',
           'X-Title': 'Hein AI'
         },
-        body: JSON.stringify({
-          model: model.id,
-          messages,
-          temperature,
-          max_tokens: maxTokens
-        }),
-        signal: controller.signal
+        body: JSON.stringify({ model: m.id, messages: msgs, temperature, max_tokens: maxTokens }),
+        signal: ctrl.signal
       });
       
-      clearTimeout(timeout);
-      const responseTime = Date.now() - startTime;
+      clearTimeout(to);
+      const dt = Date.now() - t0;
       
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => '');
-        
-        if (response.status === 429 || errorText.includes('rate limit')) {
-          const retryAfter = parseRetryAfter(errorText);
-          markModelRateLimited(model.id, retryAfter);
-        }
-        
-        updateModelStats(model.id, false, responseTime);
-        throw new Error(`${model.id} failed: ${response.status}`);
+      if (!r.ok) {
+        const err = await r.text().catch(() => '');
+        if (r.status === 429 || err.includes('rate limit')) markModelRateLimited(m.id, parseRetryAfter(err));
+        updateModelStats(m.id, false, dt);
+        throw new Error(`${m.id} failed`);
       }
       
-      const data = await response.json();
+      const data = await r.json();
       const content = data.choices?.[0]?.message?.content;
-      
       if (!content) {
-        updateModelStats(model.id, false, responseTime);
-        throw new Error(`${model.id} empty response`);
+        updateModelStats(m.id, false, dt);
+        throw new Error('empty');
       }
       
-      updateModelStats(model.id, true, responseTime);
-      console.log(`✓ ${model.id} won in ${responseTime}ms`);
-      
-      return { content, modelId: model.id, responseTime, success: true };
-    } catch (error) {
-      clearTimeout(timeout);
-      throw error;
+      updateModelStats(m.id, true, dt);
+      return { content, modelId: m.id, responseTime: dt };
+    } catch (e) {
+      clearTimeout(to);
+      throw e;
     }
   });
   
   try {
-    return await Promise.race(racePromises);
-  } catch (error) {
-    // Fallback to sequential
-    console.warn('Racing failed, falling back to sequential');
-    return await callAISequential(messages, category, options);
+    return await Promise.race(races);
+  } catch {
+    return await callAISequential(msgs, cat, opts);
   }
 }
 
-// Enhance prompt
-async function enhancePrompt(userPrompt, isImagePrompt = false) {
+async function enhancePrompt(txt, isImg = false) {
   try {
-    const systemMessage = isImagePrompt
-      ? 'Translate to English and add artistic details. Max 70 chars, no punctuation. Return only the prompt.'
-      : 'Enhance this prompt to be clearer. Max 200 chars. Return only enhanced prompt.';
-    
-    const result = await callAISequential([
-      { role: 'system', content: systemMessage },
-      { role: 'user', content: `Enhance: "${userPrompt}"` }
-    ], 'quick', { temperature: 0.7, maxTokens: isImagePrompt ? 100 : 200 });
-    
-    const enhanced = result.content.trim() || userPrompt;
-    const maxLen = isImagePrompt ? 200 : 500;
-    return enhanced.length > maxLen ? enhanced.substring(0, maxLen - 3) + '...' : enhanced;
-  } catch (error) {
-    console.warn(`Prompt enhancement failed: ${error.message}`);
-    return userPrompt;
+    const sys = isImg ? 'Translate to English, add artistic details. Max 70 chars, no punctuation. Only return prompt.' : 'Enhance prompt to be clearer. Max 200 chars. Only return enhanced prompt.';
+    const r = await callAISequential([{ role: 'system', content: sys }, { role: 'user', content: `Enhance: "${txt}"` }], 'quick', { maxTokens: isImg ? 100 : 200 });
+    const e = r.content.trim() || txt;
+    const max = isImg ? 200 : 500;
+    return e.length > max ? e.substring(0, max - 3) + '...' : e;
+  } catch {
+    return txt;
   }
 }
 
-// AI decision: search web?
-async function shouldSearchWeb(userMessage) {
+async function shouldSearchWeb(msg) {
   try {
-    const result = await callAISequential([
-      {
-        role: 'system',
-        content: 'Analyze if query needs web search. Reply ONLY "YES" or "NO". YES for: current events, news, real-time data, recent updates. NO for: general knowledge, coding, creative writing.'
-      },
-      { role: 'user', content: `Search needed for: "${userMessage}"` }
+    const r = await callAISequential([
+      { role: 'system', content: 'Analyze if query needs web search. Reply ONLY "YES" or "NO". YES for: current events, news, real-time data. NO for: general knowledge, coding, creative writing.' },
+      { role: 'user', content: `Search needed: "${msg}"` }
     ], 'quick', { temperature: 0.1, maxTokens: 10 });
-    
-    const decision = result.content.trim().toUpperCase();
-    console.log(`🤖 Search decision: ${decision}`);
-    return decision === 'YES';
-  } catch (error) {
-    console.warn(`Search decision failed: ${error.message}`);
+    return r.content.trim().toUpperCase() === 'YES';
+  } catch {
     return false;
   }
 }
 
-// OPTIMIZED: Multi-source search with timeout
-async function searchWithPrioritySources(query, timeoutMs = 20000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+async function searchWeb(q, timeout = 20000) {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), timeout);
   
   try {
-    console.log(`🔍 Searching: "${query}"`);
-    const startTime = Date.now();
-    const encodedQuery = encodeURIComponent(query);
+    const eq = encodeURIComponent(q);
+    const prio = ['wikipedia.org', 'britannica.com', 'vnexpress.net', 'bbc.com', 'stackoverflow.com'];
     
-    const priorityDomains = [
-      'wikipedia.org', 'britannica.com',
-      'vnexpress.net', 'thanhnien.vn', 'tuoitre.vn',
-      'bbc.com', 'reuters.com', 'cnn.com',
-      'stackoverflow.com', 'github.com',
-    ];
-    
-    // Fast searches only
     const searches = [
-      // DuckDuckGo
-      fetch(`https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1`, {
-        signal: controller.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      }).then(r => r.json()).then(data => {
-        const results = [];
-        if (data.Abstract) {
-          results.push({
-            title: data.Heading || 'Answer',
-            snippet: data.Abstract,
-            link: data.AbstractURL || '',
-            source: 'DuckDuckGo',
-            priority: 10
-          });
-        }
-        if (data.RelatedTopics) {
-          data.RelatedTopics.slice(0, 5).forEach(t => {
-            if (t.Text && t.FirstURL) {
-              const domain = new URL(t.FirstURL).hostname;
-              results.push({
-                title: t.Text.split(' - ')[0],
-                snippet: t.Text,
-                link: t.FirstURL,
-                source: domain,
-                priority: priorityDomains.some(pd => domain.includes(pd)) ? 5 : 1
-              });
-            }
-          });
-        }
-        return results;
-      }).catch(() => []),
+      fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } })
+        .then(r => r.json())
+        .then(d => {
+          const res = [];
+          if (d.Abstract) res.push({ title: d.Heading || 'Answer', snippet: d.Abstract, link: d.AbstractURL || '', source: 'DuckDuckGo', priority: 10 });
+          if (d.RelatedTopics) {
+            d.RelatedTopics.slice(0, 5).forEach(t => {
+              if (t.Text && t.FirstURL) {
+                const dom = new URL(t.FirstURL).hostname;
+                res.push({ title: t.Text.split(' - ')[0], snippet: t.Text, link: t.FirstURL, source: dom, priority: prio.some(p => dom.includes(p)) ? 5 : 1 });
+              }
+            });
+          }
+          return res;
+        })
+        .catch(() => []),
       
-      // Wikipedia EN
-      fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodedQuery}&format=json&srlimit=3&origin=*`, {
-        signal: controller.signal
-      }).then(r => r.json()).then(data => {
-        return (data.query?.search || []).map(item => ({
-          title: item.title,
-          snippet: item.snippet.replace(/<[^>]*>/g, ''),
-          link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
-          source: 'wikipedia.org',
-          priority: 9
-        }));
-      }).catch(() => [])
+      fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${eq}&format=json&srlimit=3&origin=*`, { signal: ctrl.signal })
+        .then(r => r.json())
+        .then(d => (d.query?.search || []).map(i => ({ title: i.title, snippet: i.snippet.replace(/<[^>]*>/g, ''), link: `https://en.wikipedia.org/wiki/${encodeURIComponent(i.title.replace(/ /g, '_'))}`, source: 'wikipedia.org', priority: 9 })))
+        .catch(() => [])
     ];
 
-    const settledResults = await Promise.allSettled(searches.map(p => 
-      Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])
-    ));
-
-    const results = settledResults
-      .filter(r => r.status === 'fulfilled' && Array.isArray(r.value))
-      .flatMap(r => r.value);
-
-    const uniqueResults = Array.from(new Map(results.map(r => [r.link, r])).values());
-    uniqueResults.sort((a, b) => b.priority - a.priority);
+    const settled = await Promise.allSettled(searches.map(p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])));
+    const res = settled.filter(r => r.status === 'fulfilled' && Array.isArray(r.value)).flatMap(r => r.value);
+    const uniq = Array.from(new Map(res.map(r => [r.link, r])).values());
+    uniq.sort((a, b) => b.priority - a.priority);
     
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✓ Found ${uniqueResults.length} results in ${elapsed}s`);
-    
-    clearTimeout(timeout);
-    return uniqueResults.slice(0, 8);
-  } catch (error) {
-    clearTimeout(timeout);
-    console.error(`Search error: ${error.message}`);
+    clearTimeout(to);
+    return uniq.slice(0, 8);
+  } catch {
+    clearTimeout(to);
     return [];
   }
 }
 
-// Summarize search results
-async function summarizeSearchResults(query, searchResults) {
-  if (!searchResults || searchResults.length === 0) {
-    return 'Không tìm thấy kết quả. Vui lòng thử lại.';
-  }
-  
+async function summarizeSearch(q, res) {
+  if (!res || !res.length) return 'Không tìm thấy kết quả.';
   try {
-    const formattedResults = searchResults
-      .slice(0, 6)
-      .map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet.substring(0, 200)}`)
-      .join('\n\n');
-    
-    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
-    
-    const result = await callAISequential([
-      {
-        role: 'system',
-        content: `Synthesize search results. Language: ${isVN ? 'Vietnamese' : 'English'}. Format: 2-3 sentence answer, then 3-4 bullet points. Cite sources [1], [2]. Max 200 words.`
-      },
-      { role: 'user', content: `Query: "${query}"\n\nResults:\n${formattedResults}` }
+    const fmt = res.slice(0, 6).map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet.substring(0, 200)}`).join('\n\n');
+    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(q);
+    const r = await callAISequential([
+      { role: 'system', content: `Synthesize search results. Language: ${isVN ? 'Vietnamese' : 'English'}. Format: 2-3 sentence answer, then 3-4 bullet points. Cite [1], [2]. Max 200 words.` },
+      { role: 'user', content: `Query: "${q}"\n\nResults:\n${fmt}` }
     ], 'research', { temperature: 0.2, maxTokens: 350 });
-    
-    const summary = result.content.trim().replace(/\*\*/g, '');
-    const sources = '\n\n---\n**📚 Nguồn:**\n' + 
-      searchResults.slice(0, 6).map((r, i) => `[${i + 1}] [${r.source}](${r.link})`).join(' • ');
-    
-    return summary + sources;
-  } catch (error) {
-    console.error(`Summarization error: ${error.message}`);
+    const sum = r.content.trim().replace(/\*\*/g, '');
+    const src = '\n\n---\n**Nguồn:**\n' + res.slice(0, 6).map((r, i) => `[${i + 1}] [${r.source}](${r.link})`).join(' • ');
+    return sum + src;
+  } catch {
     return 'Không thể tạo tóm tắt.';
   }
 }
 
-// Optimized image verification
-async function verifyImageWithPolling(imageUrl) {
-  console.log('Verifying image...');
+async function verifyImage(url) {
   await new Promise(r => setTimeout(r, 2000));
-  
   for (let i = 1; i <= 3; i++) {
     try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000);
-      
-      const response = await fetch(imageUrl, {
-        method: 'HEAD',
-        signal: controller.signal
-      });
-      
-      clearTimeout(timeout);
-      
-      if (response.ok && response.headers.get('content-type')?.startsWith('image/')) {
-        console.log(`✓ Image verified on attempt ${i}`);
-        return { success: true, attempts: i };
-      }
-    } catch (error) {
-      console.warn(`Attempt ${i} failed: ${error.message}`);
-    }
-    
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 2000);
+      const r = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
+      clearTimeout(to);
+      if (r.ok && r.headers.get('content-type')?.startsWith('image/')) return { success: true, attempts: i };
+    } catch { }
     if (i < 3) await new Promise(r => setTimeout(r, 800));
   }
-  
   return { success: false, attempts: 3 };
 }
 
-// Security middleware
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com", "https://en.wikipedia.org"],
-    }
-  }
-}));
-
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], scriptSrc: ["'self'"], imgSrc: ["'self'", "data:", "https:", "http:"], connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com", "https://en.wikipedia.org"] } } }));
 app.set('trust proxy', 1);
 
-// Rate limiting
-const generalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  message: { error: 'Too many requests' }
+const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: { error: 'Too many requests' } });
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Too many auth attempts' }, skipSuccessfulRequests: true });
+const imageLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, message: { error: 'Too many image requests' } });
+
+const allowedOrigins = ['https://hein1.onrender.com', 'https://test-d9o3.onrender.com', ...(process.env.NODE_ENV === 'development' ? ['http://localhost:3000', 'http://localhost:5173'] : [])];
+
+app.use(cors({ origin: (o, cb) => (!o || allowedOrigins.includes(o)) ? cb(null, true) : cb(new Error('CORS')), credentials: true }));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), { maxAge: '1d' }));
+app.use(generalLimiter);
+
+function sanitizeInput(i) {
+  if (typeof i !== 'string') return i;
+  return xss(i.trim(), { whiteList: { a: ['href'], img: ['src', 'alt'], b: [], strong: [], i: [], em: [], code: [], pre: [], ul: [], ol: [], li: [], p: [], br: [] }, stripIgnoreTag: true });
+}
+
+function authenticateToken(req, res, next) {
+  const token = req.headers['authorization']?.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token' });
+  jwt.verify(token, jwtSecret, (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' });
+    req.user = user;
+    next();
+  });
+}
+
+app.get('/', (req, res) => res.json({ status: 'OK', version: '3.1', features: ['Speed optimized', 'Racing + Sequential', 'Multi-source search', 'Rate limit handling'] }));
+
+app.get('/health', async (req, res) => {
+  try {
+    const { error } = await supabase.from('users').select('id').limit(1);
+    if (error) throw error;
+    res.json({ status: 'OK', uptime: process.uptime() });
+  } catch {
+    res.status(503).json({ status: 'ERROR' });
+  }
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 5,
-  message: { error: 'Too many auth attempts' },
-  skipSuccessfulRequests: true
+app.get('/api/model-stats', (req, res) => {
+  const stats = {};
+  for (const [id, d] of modelStats.entries()) {
+    const tot = d.successCount + d.failCount;
+    stats[id] = { successRate: tot > 0 ? ((d.successCount / tot) * 100).toFixed(1) + '%' : 'N/A', avgTime: d.avgResponseTime > 0 ? d.avgResponseTime.toFixed(0) + 'ms' : 'N/A', totalCalls: tot };
+  }
+  res.json({ stats });
 });
 
-const imageLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 15,
-  message: { error: 'Too many image requests' }
+app.post('/api/register', authLimiter, async (req, res) => {
+  try {
+    const { email, password, name } = req.body;
+    if (!email || !password || !name) return res.status(400).json({ error: 'Missing fields' });
+    const e = sanitizeInput(email).toLowerCase();
+    const n = sanitizeInput(name);
+    if (password.length < 6) return res.status(400).json({ error: 'Password too short' });
+    const { data: ex } = await supabase.from('users').select('id').eq('email', e).maybeSingle();
+    if (ex) return res.status(400).json({ error: 'Email exists' });
+    const h = await bcrypt.hash(password, 10);
+    const { data: u, error } = await supabase.from('users').insert([{ email: e, password: h, name: n }]).select().single();
+    if (error) return res.status(500).json({ error: 'Registration failed' });
+    const token = jwt.sign({ id: u.id, email: u.email }, jwtSecret, { expiresIn: '7d' });
+    res.status(201).json({ token, user: { id: u.id, email: u.email, name: u.name } });
+  } catch {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
-// CORS
-const allowedOrigins = [
-  'https://hein1.onrender.com',
-  'https://test-d9o3.onrender.com',
-  ...(process.env.NODE_ENV === 'development' ? [
-    'http://localhost:3000',
-    'http://localhost:5173'
-  ] : [])
-];
+app.post('/api/login', authLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Missing credentials' });
+    const e = sanitizeInput(email).toLowerCase();
+    const { data: u, error } = await supabase.from('users').select('*').eq('email', e).maybeSingle();
+    if (error || !u) return res.status(401).json({ error: 'Invalid credentials' });
+    const ok = await bcrypt.compare(password, u.password);
+    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
+    const token = jwt.sign({ id: u.id, email: u.email }, jwtSecret, { expiresIn: '7d' });
+    res.json({ token, user: { id: u.id, email: u.email, name: u.name } });
+  } catch {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
-app.use(cors({
-  origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
+app.post('/api/chat', authenticateToken, async (req, res) => {
+  try {
+    const { messages, chatId, prompt } = req.body;
+    if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Invalid messages' });
+    
+    const uid = req.user.id;
+    let cid = chatId;
+
+    if (!cid) {
+      const fm = sanitizeInput(prompt || messages[0]?.content || 'New chat');
+      const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: fm.substring(0, 50) }]).select().single();
+      if (error) return res.status(500).json({ error: 'Failed to create chat' });
+      cid = c.id;
     } else {
-      const { data: chat } = await supabase
-        .from('chats')
-        .select('id')
-        .eq('id', chatId)
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (!chat) return res.status(404).json({ error: 'Chat not found' });
-      newChatId = chat.id;
+      const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
+      if (!c) return res.status(404).json({ error: 'Chat not found' });
+      cid = c.id;
     }
 
-    const userContent = prompt ? sanitizeInput(prompt) : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
-    if (!userContent) return res.status(400).json({ error: 'No message' });
+    const uc = prompt ? sanitizeInput(prompt) : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
+    if (!uc) return res.status(400).json({ error: 'No message' });
 
-    // Save user message
-    await supabase.from('messages').insert([{
-      chat_id: newChatId,
-      role: 'user',
-      content: userContent,
-      timestamp: new Date().toISOString()
-    }]);
+    await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: uc, timestamp: new Date().toISOString() }]);
 
-    const startTime = Date.now();
-    let aiMessage = '';
-    let usedModel = '';
-    let wasWebSearch = false;
-    let searchSources = [];
+    const t0 = Date.now();
+    let msg = '', model = '', isSearch = false, srcs = [];
 
-    // Check if web search needed
-    const searchKeywords = ['tìm kiếm:', 'search:', 'tra cứu:'];
-    const hasKeyword = searchKeywords.some(k => userContent.toLowerCase().startsWith(k.toLowerCase()));
-    
-    let shouldSearch = hasKeyword || await shouldSearchWeb(userContent);
+    const kw = ['tìm kiếm:', 'search:', 'tra cứu:'];
+    const hasKw = kw.some(k => uc.toLowerCase().startsWith(k.toLowerCase()));
+    const doSearch = hasKw || await shouldSearchWeb(uc);
 
-    if (shouldSearch) {
-      wasWebSearch = true;
-      let query = userContent;
-      
-      if (hasKeyword) {
-        for (const k of searchKeywords) {
-          if (userContent.toLowerCase().startsWith(k.toLowerCase())) {
-            query = userContent.substring(k.length).trim();
+    if (doSearch) {
+      isSearch = true;
+      let q = uc;
+      if (hasKw) {
+        for (const k of kw) {
+          if (uc.toLowerCase().startsWith(k.toLowerCase())) {
+            q = uc.substring(k.length).trim();
             break;
           }
         }
       }
-
-      const searchResults = await searchWithPrioritySources(query, 20000).catch(() => []);
-      
-      if (searchResults.length > 0) {
-        searchSources = [...new Set(searchResults.map(r => r.source))].slice(0, 5);
-        aiMessage = await summarizeSearchResults(query, searchResults);
-        usedModel = 'research';
+      const sres = await searchWeb(q, 20000).catch(() => []);
+      if (sres.length > 0) {
+        srcs = [...new Set(sres.map(r => r.source))].slice(0, 5);
+        msg = await summarizeSearch(q, sres);
+        model = 'research';
       } else {
-        aiMessage = 'Không tìm thấy kết quả. Vui lòng thử lại.';
+        msg = 'Không tìm thấy kết quả.';
       }
     } else {
-      // Regular chat - use racing for speed
-      const mappedMessages = messages.map(m => ({
-        role: m.role === 'ai' ? 'assistant' : m.role,
-        content: sanitizeInput(m.content)
-      }));
-
-      const systemMsg = {
-        role: 'system',
-        content: 'You are Hein, an AI by Hien2309. Answer in user\'s language. Be accurate, concise, practical. No fabrication.'
-      };
-
+      const mm = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: sanitizeInput(m.content) }));
+      const sys = { role: 'system', content: 'You are Hein, an AI by Hien2309. Answer in user\'s language. Be accurate, concise, practical.' };
       try {
-        const result = await callAIRacing([systemMsg, ...mappedMessages], 'chat', {
-          temperature: 0.7,
-          maxTokens: 500
-        });
-        
-        aiMessage = result.content;
-        usedModel = result.modelId;
-      } catch (error) {
-        console.error(`AI failed: ${error.message}`);
-        return res.status(500).json({ error: 'AI unavailable', code: 'AI_ERROR' });
+        const r = await callAIRacing([sys, ...mm], 'chat', { temperature: 0.7, maxTokens: 500 });
+        msg = r.content;
+        model = r.modelId;
+      } catch {
+        return res.status(500).json({ error: 'AI unavailable' });
       }
     }
 
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    
-    if (wasWebSearch) {
-      aiMessage += `\n\n*⏱️ ${elapsed}s | Sources: ${searchSources.length}*`;
-    } else {
-      aiMessage += `\n\n*🤖 ${usedModel.split('/')[1]} | ⏱️ ${elapsed}s*`;
-    }
+    const dt = ((Date.now() - t0) / 1000).toFixed(2);
+    msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources*` : `\n\n*${model.split('/')[1]} | ${dt}s*`;
 
-    // Save AI message
-    const { data: savedMsg, error: msgError } = await supabase
-      .from('messages')
-      .insert([{
-        chat_id: newChatId,
-        role: 'ai',
-        content: sanitizeInput(aiMessage),
-        timestamp: new Date().toISOString()
-      }])
-      .select()
-      .single();
+    const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: sanitizeInput(msg), timestamp: new Date().toISOString() }]).select().single();
+    if (me) return res.status(500).json({ error: 'Failed to save' });
 
-    if (msgError) return res.status(500).json({ error: 'Failed to save message' });
+    await supabase.from('chats').update({ last_message: sanitizeInput(uc).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', cid);
 
-    // Update chat
-    await supabase
-      .from('chats')
-      .update({
-        last_message: sanitizeInput(userContent).substring(0, 100),
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', newChatId);
-
-    res.json({
-      message: aiMessage,
-      messageId: savedMsg.id,
-      chatId: newChatId,
-      timestamp: savedMsg.timestamp,
-      isWebSearch: wasWebSearch,
-      usedModel: usedModel
-    });
-  } catch (err) {
-    console.error(`Chat error: ${err.message}`);
-    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
+    res.json({ message: msg, messageId: sm.id, chatId: cid, timestamp: sm.timestamp, isWebSearch: isSearch, usedModel: model });
+  } catch {
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Generate image - OPTIMIZED
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
-    
-    if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
-      return res.status(400).json({ error: 'Invalid prompt', code: 'INVALID_INPUT' });
-    }
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) return res.status(400).json({ error: 'Invalid prompt' });
+    if (prompt.length > 500) return res.status(400).json({ error: 'Prompt too long' });
 
-    if (prompt.length > 500) {
-      return res.status(400).json({ error: 'Prompt too long', code: 'PROMPT_TOO_LONG' });
-    }
+    const sp = sanitizeInput(prompt);
+    const uid = req.user.id;
+    let cid = chatId;
 
-    const sanitizedPrompt = sanitizeInput(prompt);
-    const userId = req.user.id;
-    let newChatId = chatId;
-
-    // Create or verify chat
-    if (!chatId) {
-      const { data: chat, error } = await supabase
-        .from('chats')
-        .insert([{ user_id: userId, title: `Image: ${sanitizedPrompt.substring(0, 40)}` }])
-        .select()
-        .single();
-
+    if (!cid) {
+      const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: `Image: ${sp.substring(0, 40)}` }]).select().single();
       if (error) return res.status(500).json({ error: 'Failed to create chat' });
-      newChatId = chat.id;
+      cid = c.id;
     } else {
-      const { data: chat } = await supabase
-        .from('chats')
-        .select('id')
-        .eq('id', chatId)
-        .eq('user_id', userId)
-        .maybeSingle();
-
-      if (!chat) return res.status(404).json({ error: 'Chat not found' });
-      newChatId = chat.id;
+      const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
+      if (!c) return res.status(404).json({ error: 'Chat not found' });
+      cid = c.id;
     }
 
-    // Save user message
-    await supabase.from('messages').insert([{
-      chat_id: newChatId,
-      role: 'user',
-      content: sanitizedPrompt,
-      timestamp: new Date().toISOString()
-    }]);
+    await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
 
-    const startTime = Date.now();
-    const enhancedPrompt = await enhancePrompt(sanitizedPrompt, true);
-    const encodedPrompt = encodeURIComponent(enhancedPrompt);
-    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
+    const t0 = Date.now();
+    const ep = await enhancePrompt(sp, true);
+    const eqp = encodeURIComponent(ep);
+    const iurl = `https://image.pollinations.ai/prompt/${eqp}?width=1024&height=1024&nologo=true`;
 
-    // Fetch image
-    const imageResponse = await fetch(imageUrl, {
-      method: 'GET',
-      headers: { 'Accept': 'image/*' }
-    });
+    const ir = await fetch(iurl, { method: 'GET', headers: { 'Accept': 'image/*' } });
+    if (!ir.ok) return res.status(500).json({ error: 'Image generation failed' });
 
-    if (!imageResponse.ok) {
-      return res.status(500).json({ error: 'Image generation failed' });
+    const ct = ir.headers.get('content-type');
+    if (!ct || !ct.startsWith('image/')) return res.status(500).json({ error: 'Invalid image response' });
+
+    const buf = await ir.buffer();
+    const iid = uuidv4();
+    let furl = iurl;
+
+    const { error: se } = await supabase.storage.from('images').upload(`public/${iid}.png`, buf, { contentType: ct, upsert: true });
+    if (!se) {
+      const { data: sd } = await supabase.storage.from('images').createSignedUrl(`public/${iid}.png`, 86400);
+      if (sd?.signedUrl) furl = sd.signedUrl;
     }
 
-    const contentType = imageResponse.headers.get('content-type');
-    if (!contentType || !contentType.startsWith('image/')) {
-      return res.status(500).json({ error: 'Invalid image response' });
-    }
+    const v = await verifyImage(furl);
+    const dt = ((Date.now() - t0) / 1000).toFixed(2);
+    const mc = `![Image](${furl})\n\n*Enhanced: ${ep}*\n*${dt}s ${v.success ? '(verified)' : ''}*`;
 
-    const imageBuffer = await imageResponse.buffer();
-    const imageId = uuidv4();
-    let finalImageUrl = imageUrl;
+    const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
+    if (me) return res.status(500).json({ error: 'Failed to save' });
 
-    // Try to store in Supabase
-    const { error: storageError } = await supabase.storage
-      .from('images')
-      .upload(`public/${imageId}.png`, imageBuffer, {
-        contentType: contentType,
-        upsert: true
-      });
+    await supabase.from('chats').update({ last_message: `Image: ${sp.substring(0, 50)}`, updated_at: new Date().toISOString() }).eq('id', cid);
 
-    if (!storageError) {
-      const { data: signedData } = await supabase.storage
-        .from('images')
-        .createSignedUrl(`public/${imageId}.png`, 60 * 60 * 24);
-      
-      if (signedData?.signedUrl) finalImageUrl = signedData.signedUrl;
-    }
-
-    // Verify image
-    const verification = await verifyImageWithPolling(finalImageUrl);
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-
-    const messageContent = `![Generated Image](${finalImageUrl})\n\n*Enhanced: ${enhancedPrompt}*\n*⏱️ ${elapsed}s ${verification.success ? '(verified)' : ''}*`;
-
-    const { data: savedMsg, error: msgError } = await supabase
-      .from('messages')
-      .insert([{
-        chat_id: newChatId,
-        role: 'ai',
-        content: messageContent,
-        timestamp: new Date().toISOString()
-      }])
-      .select()
-      .single();
-
-    if (msgError) return res.status(500).json({ error: 'Failed to save message' });
-
-    await supabase
-      .from('chats')
-      .update({
-        last_message: `Image: ${sanitizedPrompt.substring(0, 50)}`,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', newChatId);
-
-    res.json({
-      message: messageContent,
-      imageUrl: finalImageUrl,
-      enhancedPrompt: enhancedPrompt,
-      messageId: savedMsg.id,
-      chatId: newChatId,
-      timestamp: savedMsg.timestamp
-    });
-  } catch (err) {
-    console.error(`Image error: ${err.message}`);
-    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
-  }
-});
-
-// Chat history
-app.get('/api/chat/history', authenticateToken, async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
-    const offset = (page - 1) * limit;
-
-    const { data: chats, error } = await supabase
-      .from('chats')
-      .select('id, title, last_message, created_at, updated_at')
-      .eq('user_id', userId)
-      .order('updated_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-
-    if (error) return res.status(500).json({ error: 'Failed to fetch history' });
-
-    const history = await Promise.all(chats.map(async (chat) => {
-      const { data: messages } = await supabase
-        .from('messages')
-        .select('id, role, content, timestamp')
-        .eq('chat_id', chat.id)
-        .order('timestamp', { ascending: true })
-        .limit(100);
-
-      return { ...chat, messages: messages || [] };
-    }));
-
-    res.json({ history, page, limit });
-  } catch (err) {
+    res.json({ message: mc, imageUrl: furl, enhancedPrompt: ep, messageId: sm.id, chatId: cid, timestamp: sm.timestamp });
+  } catch {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Delete chat
+app.get('/api/chat/history', authenticateToken, async (req, res) => {
+  try {
+    const uid = req.user.id;
+    const pg = Math.max(1, parseInt(req.query.page) || 1);
+    const lim = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
+    const off = (pg - 1) * lim;
+
+    const { data: chats, error } = await supabase.from('chats').select('id, title, last_message, created_at, updated_at').eq('user_id', uid).order('updated_at', { ascending: false }).range(off, off + lim - 1);
+    if (error) return res.status(500).json({ error: 'Failed to fetch history' });
+
+    const hist = await Promise.all(chats.map(async c => {
+      const { data: msgs } = await supabase.from('messages').select('id, role, content, timestamp').eq('chat_id', c.id).order('timestamp', { ascending: true }).limit(100);
+      return { ...c, messages: msgs || [] };
+    }));
+
+    res.json({ history: hist, page: pg, limit: lim });
+  } catch {
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
   try {
     const { chatId } = req.params;
-    const userId = req.user.id;
-
-    if (!validate(chatId)) {
-      return res.status(400).json({ error: 'Invalid chat ID' });
-    }
-
-    const { data: chat } = await supabase
-      .from('chats')
-      .select('id')
-      .eq('id', chatId)
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (!chat) return res.status(404).json({ error: 'Chat not found' });
-
+    const uid = req.user.id;
+    if (!validate(chatId)) return res.status(400).json({ error: 'Invalid chat ID' });
+    const { data: c } = await supabase.from('chats').select('id').eq('id', chatId).eq('user_id', uid).maybeSingle();
+    if (!c) return res.status(404).json({ error: 'Chat not found' });
     await supabase.from('messages').delete().eq('chat_id', chatId);
-    await supabase.from('chats').delete().eq('id', chatId).eq('user_id', userId);
-
+    await supabase.from('chats').delete().eq('id', chatId).eq('user_id', uid);
     res.json({ message: 'Chat deleted', chatId });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// Delete message
 app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
-    const userId = req.user.id;
-
-    if (!validate(messageId)) {
-      return res.status(400).json({ error: 'Invalid message ID' });
-    }
-
-    const { data: message, error: msgError } = await supabase
-      .from('messages')
-      .select('chat_id')
-      .eq('id', messageId)
-      .maybeSingle();
-
-    if (msgError || !message) {
-      return res.status(404).json({ error: 'Message not found' });
-    }
-
-    const { data: chat, error: chatError } = await supabase
-      .from('chats')
-      .select('id')
-      .eq('id', message.chat_id)
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    if (chatError || !chat) {
-      return res.status(404).json({ error: 'Chat not found' });
-    }
-
-    const { error: deleteError } = await supabase
-      .from('messages')
-      .delete()
-      .eq('id', messageId);
-
-    if (deleteError) {
-      return res.status(500).json({ error: 'Failed to delete message' });
-    }
-
-    const { data: lastMsg } = await supabase
-      .from('messages')
-      .select('content')
-      .eq('chat_id', message.chat_id)
-      .order('timestamp', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (lastMsg) {
-      await supabase
-        .from('chats')
-        .update({
-          last_message: sanitizeInput(lastMsg.content).substring(0, 100),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', message.chat_id);
-    }
-
+    const uid = req.user.id;
+    if (!validate(messageId)) return res.status(400).json({ error: 'Invalid message ID' });
+    const { data: m, error: me } = await supabase.from('messages').select('chat_id').eq('id', messageId).maybeSingle();
+    if (me || !m) return res.status(404).json({ error: 'Message not found' });
+    const { data: c, error: ce } = await supabase.from('chats').select('id').eq('id', m.chat_id).eq('user_id', uid).maybeSingle();
+    if (ce || !c) return res.status(404).json({ error: 'Chat not found' });
+    const { error: de } = await supabase.from('messages').delete().eq('id', messageId);
+    if (de) return res.status(500).json({ error: 'Failed to delete' });
+    const { data: lm } = await supabase.from('messages').select('content').eq('chat_id', m.chat_id).order('timestamp', { ascending: false }).limit(1).maybeSingle();
+    if (lm) await supabase.from('chats').update({ last_message: sanitizeInput(lm.content).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', m.chat_id);
     res.json({ message: 'Message deleted', messageId });
-  } catch (err) {
+  } catch {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
-// SPA catch-all
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/')) {
-    return res.status(404).json({ error: 'Not found' });
-  }
-  
-  const indexPath = path.join(__dirname, 'test', 'frontend', 'dist', 'index.html');
-  res.sendFile(indexPath, (err) => {
-    if (err) res.status(500).json({ error: 'Failed to serve app' });
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
+  const idx = path.join(__dirname, 'test', 'frontend', 'dist', 'index.html');
+  res.sendFile(idx, err => {
+    if (err) res.status(500).json({ error: 'Failed to serve' });
   });
 });
 
-// Error handler
 app.use((err, req, res, next) => {
   console.error(`Error: ${err.message}`);
-  
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({ error: 'CORS error' });
-  }
-  
+  if (err.message === 'CORS') return res.status(403).json({ error: 'CORS error' });
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
 const server = app.listen(process.env.PORT || 3001, () => {
-  console.log(`========================================`);
-  console.log(`🚀 Server running on port ${process.env.PORT || 3001}`);
-  console.log(`========================================`);
+  console.log('========================================');
+  console.log(`Server running on port ${process.env.PORT || 3001}`);
+  console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log(`\n⚡ Optimized Features:`);
-  console.log(`   ├─ Racing mode: 2 fastest models compete`);
-  console.log(`   ├─ Sequential fallback: tries all if racing fails`);
-  console.log(`   ├─ Smart rate limit handling`);
-  console.log(`   └─ Auto-learning performance tracking`);
-  console.log(`\n🔍 Multi-source search: DuckDuckGo + Wikipedia`);
-  console.log(`🔒 Security: Rate limiting + Helmet + CORS`);
-  console.log(`\nVersion: 3.1.0 - Speed Optimized`);
-  console.log(`========================================\n`);
+  console.log('\nOptimized Features:');
+  console.log('   Racing: 2 fastest models compete');
+  console.log('   Sequential fallback: all models');
+  console.log('   Smart rate limit handling');
+  console.log('   Auto-learning performance');
+  console.log('\nMulti-source search: DuckDuckGo + Wikipedia');
+  console.log('Security: Rate limiting + Helmet + CORS');
+  console.log('\nVersion: 3.1 - Speed Optimized');
+  console.log('========================================\n');
 });
 
-// Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('Shutting down gracefully...');
+  console.log('Shutting down...');
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
@@ -988,191 +628,9 @@ process.on('SIGTERM', () => {
 });
 
 process.on('SIGINT', () => {
-  console.log('Shutting down gracefully...');
+  console.log('Shutting down...');
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
   });
-});callback(new Error('Not allowed by CORS'));
-    }
-  },
-  credentials: true
-}));
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), { maxAge: '1d' }));
-app.use(generalLimiter);
-
-// Sanitize input
-function sanitizeInput(input) {
-  if (typeof input !== 'string') return input;
-  return xss(input.trim(), {
-    whiteList: {
-      a: ['href'], img: ['src', 'alt'], b: [], strong: [], i: [], em: [], code: [], pre: [],
-      ul: [], ol: [], li: [], p: [], br: []
-    },
-    stripIgnoreTag: true
-  });
-}
-
-// JWT middleware
-function authenticateToken(req, res, next) {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token', code: 'NO_TOKEN' });
-
-  jwt.verify(token, jwtSecret, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid token', code: 'INVALID_TOKEN' });
-    req.user = user;
-    next();
-  });
-}
-
-// Root endpoint
-app.get('/', (req, res) => {
-  res.json({
-    status: 'OK',
-    version: '3.1.0',
-    features: [
-      '⚡ Optimized for speed',
-      '🚀 Sequential + Racing modes',
-      '🔍 Multi-source search',
-      '🎯 Smart rate limiting',
-      '🔒 Security hardened'
-    ]
-  });
 });
-
-// Health check
-app.get('/health', async (req, res) => {
-  try {
-    const { error } = await supabase.from('users').select('id').limit(1);
-    if (error) throw error;
-    
-    res.json({
-      status: 'OK',
-      uptime: process.uptime(),
-      memory: process.memoryUsage()
-    });
-  } catch (error) {
-    res.status(503).json({ status: 'ERROR' });
-  }
-});
-
-// Model stats
-app.get('/api/model-stats', (req, res) => {
-  const stats = {};
-  for (const [modelId, data] of modelStats.entries()) {
-    const total = data.successCount + data.failCount;
-    stats[modelId] = {
-      successRate: total > 0 ? ((data.successCount / total) * 100).toFixed(1) + '%' : 'N/A',
-      avgResponseTime: data.avgResponseTime > 0 ? data.avgResponseTime.toFixed(0) + 'ms' : 'N/A',
-      totalCalls: total
-    };
-  }
-  res.json({ stats });
-});
-
-// Register
-app.post('/api/register', authLimiter, async (req, res) => {
-  try {
-    const { email, password, name } = req.body;
-    if (!email || !password || !name) {
-      return res.status(400).json({ error: 'Missing fields', code: 'INVALID_INPUT' });
-    }
-
-    const sanitizedEmail = sanitizeInput(email).toLowerCase();
-    const sanitizedName = sanitizeInput(name);
-
-    if (password.length < 6) {
-      return res.status(400).json({ error: 'Password too short', code: 'INVALID_PASSWORD' });
-    }
-
-    const { data: existing } = await supabase
-      .from('users')
-      .select('id')
-      .eq('email', sanitizedEmail)
-      .maybeSingle();
-
-    if (existing) {
-      return res.status(400).json({ error: 'Email exists', code: 'EMAIL_EXISTS' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const { data: user, error } = await supabase
-      .from('users')
-      .insert([{ email: sanitizedEmail, password: hashedPassword, name: sanitizedName }])
-      .select()
-      .single();
-
-    if (error) {
-      return res.status(500).json({ error: 'Registration failed', code: 'DATABASE_ERROR' });
-    }
-
-    const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
-    res.status(201).json({
-      token,
-      user: { id: user.id, email: user.email, name: user.name }
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
-  }
-});
-
-// Login
-app.post('/api/login', authLimiter, async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: 'Missing credentials', code: 'INVALID_INPUT' });
-    }
-
-    const sanitizedEmail = sanitizeInput(email).toLowerCase();
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', sanitizedEmail)
-      .maybeSingle();
-
-    if (error || !user) {
-      return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
-    }
-
-    const isValid = await bcrypt.compare(password, user.password);
-    if (!isValid) {
-      return res.status(401).json({ error: 'Invalid credentials', code: 'INVALID_CREDENTIALS' });
-    }
-
-    const token = jwt.sign({ id: user.id, email: user.email }, jwtSecret, { expiresIn: '7d' });
-    res.json({
-      token,
-      user: { id: user.id, email: user.email, name: user.name }
-    });
-  } catch (err) {
-    res.status(500).json({ error: 'Server error', code: 'SERVER_ERROR' });
-  }
-});
-
-// Chat endpoint - OPTIMIZED
-app.post('/api/chat', authenticateToken, async (req, res) => {
-  try {
-    const { messages, chatId, prompt } = req.body;
-    
-    if (!messages || !Array.isArray(messages)) {
-      return res.status(400).json({ error: 'Invalid messages', code: 'INVALID_INPUT' });
-    }
-
-    const userId = req.user.id;
-    let newChatId = chatId;
-
-    // Create or verify chat
-    if (!chatId) {
-      const firstMsg = sanitizeInput(prompt || messages[0]?.content || 'New chat');
-      const { data: chat, error } = await supabase
-        .from('chats')
-        .insert([{ user_id: userId, title: firstMsg.substring(0, 50) }])
-        .select()
-        .single();
-
-      if (error) return res.status(500).json({ error: 'Failed to create chat' });
-      newChatId = chat.id;
-    } else {
