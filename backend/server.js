@@ -189,7 +189,7 @@ async function enhancePrompt(userPrompt, isImagePrompt = false) {
         'X-Title': 'Hein AI'
       },
       body: JSON.stringify({
-        model: 'x-ai/grok-4-fast:free',
+        model: 'deepseek/deepseek-chat-v3.1:free',
         messages: enhanceMessages,
         temperature: 0.7,
         max_tokens: isImagePrompt ? 100 : 200
@@ -342,7 +342,7 @@ async function summarizeWithAI(query, searchResults) {
         'X-Title': 'Hein AI'
       },
       body: JSON.stringify({
-        model: 'x-ai/grok-4-fast:free',
+        model: 'deepseek/deepseek-chat-v3.1:free',
         messages: summaryMessages,
         temperature: 0.7,
         max_tokens: 500
@@ -623,7 +623,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
           'X-Title': 'Hein AI'
         },
         body: JSON.stringify({
-          model: 'x-ai/grok-4-fast:free',
+          model: 'deepseek/deepseek-chat-v3.1:free',
           messages: messagesWithSystem
         })
       });
