@@ -13,8 +13,6 @@ import { validate } from 'uuid';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-const { default: cheerio } = await import('cheerio');
-
 dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,7 +34,7 @@ const jwtSecret = process.env.JWT_SECRET;
 
 // Serve static files from the Vite build output (dist folder)
 app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), {
-  maxAge: '1d' // Cache 1 ngày
+  maxAge: '1d'
 }));
 
 // Enable trust proxy for Render
@@ -50,7 +48,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai"],
+      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -122,7 +120,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.6',
+    version: '1.0.7',
     endpoints: [
       '/health',
       '/api/register',
@@ -136,6 +134,7 @@ app.get('/', (req, res) => {
     features: [
       'AI-enhanced image prompts (70 chars max)',
       'AI-enhanced chat prompts (200 chars max)',
+      'Fast web search (10-15s with priority sources)',
       'Optimized smart polling (2s + 5x0.8s)',
       'Rate limit: 15 images/min'
     ]
@@ -282,54 +281,138 @@ async function verifyImageWithPolling(imageUrl) {
   };
 }
 
-// Function to search DuckDuckGo and extract results
-async function searchDuckDuckGo(query) {
+// Improved web search with priority sources and timeout
+async function searchWithPrioritySources(query, timeoutMs = 12000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
   try {
+    console.log(`Starting priority web search for: "${query}"`);
+    const startTime = Date.now();
+    
+    // Priority sources - trusted domains
+    const priorityDomains = [
+      'wikipedia.org',
+      'vnexpress.net',
+      'thanhnien.vn',
+      'tuoitre.vn',
+      'bbc.com',
+      'reuters.com',
+      'nytimes.com',
+      'cnn.com',
+      'theguardian.com'
+    ];
+    
     const encodedQuery = encodeURIComponent(query);
-    const response = await fetch(`https://duckduckgo.com/html/?q=${encodedQuery}`, {
+    
+    // Use DuckDuckGo API
+    const searchUrl = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
+    
+    const response = await fetch(searchUrl, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-      }
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      },
+      signal: controller.signal
     });
 
     if (!response.ok) {
-      throw new Error(`DuckDuckGo search failed: ${response.status}`);
+      throw new Error(`Search API failed: ${response.status}`);
     }
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
+    const data = await response.json();
     const results = [];
-
-    $('.result').each((i, el) => {
-      if (i >= 5) return false; // Limit to top 5 results
-      
-      const title = $(el).find('.result__title').text().trim();
-      const link = $(el).find('.result__a').attr('href');
-      const snippet = $(el).find('.result__snippet').text().trim();
-      
-      if (title && link && snippet) {
-        results.push({ title, link, snippet });
+    
+    // Extract instant answer if available
+    if (data.Abstract && data.Abstract.length > 0) {
+      results.push({
+        title: data.Heading || 'Instant Answer',
+        snippet: data.Abstract,
+        link: data.AbstractURL || data.AbstractSource || '',
+        source: data.AbstractSource || 'DuckDuckGo',
+        priority: 10
+      });
+    }
+    
+    // Extract related topics
+    if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
+      for (const topic of data.RelatedTopics.slice(0, 8)) {
+        if (topic.Text && topic.FirstURL) {
+          try {
+            const domain = new URL(topic.FirstURL).hostname;
+            const isPriority = priorityDomains.some(pd => domain.includes(pd));
+            
+            results.push({
+              title: topic.Text.split(' - ')[0] || 'Related Topic',
+              snippet: topic.Text,
+              link: topic.FirstURL,
+              source: domain,
+              priority: isPriority ? 5 : 1
+            });
+          } catch (urlError) {
+            console.warn(`Invalid URL in topic: ${topic.FirstURL}`);
+          }
+        }
       }
-    });
-
-    return results;
+    }
+    
+    // Sort by priority and limit to top 5
+    results.sort((a, b) => b.priority - a.priority);
+    const topResults = results.slice(0, 5);
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✓ Search completed in ${elapsed}s, found ${topResults.length} results`);
+    
+    clearTimeout(timeout);
+    return topResults;
+    
   } catch (error) {
-    console.error(`DuckDuckGo search error: ${error.message}`);
+    clearTimeout(timeout);
+    
+    if (error.name === 'AbortError') {
+      console.error(`Search timeout after ${timeoutMs}ms`);
+      return [];
+    }
+    
+    console.error(`Search error: ${error.message}`);
     return [];
   }
 }
 
-// Function to summarize search results with AI
-async function summarizeWithAI(query, searchResults) {
+// Enhanced AI summarization with concise output
+async function summarizeSearchResults(query, searchResults, timeoutMs = 8000) {
+  if (!searchResults || searchResults.length === 0) {
+    return 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
+  }
+  
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
   try {
+    console.log(`Starting AI summarization for ${searchResults.length} results...`);
+    const startTime = Date.now();
+    
+    // Format search results for AI
+    const formattedResults = searchResults
+      .map((r, i) => `[${i + 1}] ${r.title} (${r.source})\n${r.snippet}`)
+      .join('\n\n');
+    
+    const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
+    
     const summaryMessages = [
       {
         role: 'system',
-        content: 'You are a helpful assistant that summarizes web search results concisely. If the user query is short (under 20 words), keep your response brief and to the point. Structure the summary with key points, sources, and be accurate. Respond in Vietnamese if the query is in Vietnamese.'
+        content: `You are a concise information synthesizer. Create a brief, accurate summary from search results. Rules:
+- Use ${isVietnamese ? 'Vietnamese' : 'English'} language
+- Start with a direct answer (2-3 sentences)
+- Add 2-4 key bullet points with important facts
+- Cite sources using [1], [2] notation
+- Keep total response under 250 words
+- Be factual and objective, no speculation
+- Focus on the most relevant information`
       },
       {
         role: 'user',
-        content: `Summarize these search results for the query "${query}":\n\n${searchResults.map(r => `- ${r.title}: ${r.snippet} (Source: ${r.link})`).join('\n')}`
+        content: `Query: "${query}"\n\nSearch Results:\n${formattedResults}\n\nProvide a concise summary with key facts and source citations.`
       }
     ];
 
@@ -344,20 +427,42 @@ async function summarizeWithAI(query, searchResults) {
       body: JSON.stringify({
         model: 'deepseek/deepseek-chat-v3.1:free',
         messages: summaryMessages,
-        temperature: 0.7,
-        max_tokens: 500
-      })
+        temperature: 0.3,
+        max_tokens: 400
+      }),
+      signal: controller.signal
     });
+
+    clearTimeout(timeout);
 
     if (!response.ok) {
       throw new Error(`AI summarization failed: ${response.status}`);
     }
 
     const data = await response.json();
-    return data.choices?.[0]?.message?.content?.trim() || 'No summary available.';
+    const summary = data.choices?.[0]?.message?.content?.trim() || 'Không thể tạo tóm tắt từ kết quả tìm kiếm.';
+    
+    // Add source references
+    const sourcesSection = '\n\n**📚 Nguồn tham khảo:**\n' + 
+      searchResults
+        .map((r, i) => `[${i + 1}] ${r.source}${r.link ? `: ${r.link}` : ''}`)
+        .join('\n');
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✓ Summarization completed in ${elapsed}s`);
+    
+    return summary + sourcesSection;
+    
   } catch (error) {
-    console.error(`AI summarization error: ${error.message}`);
-    return 'Failed to summarize results.';
+    clearTimeout(timeout);
+    
+    if (error.name === 'AbortError') {
+      console.error(`Summarization timeout after ${timeoutMs}ms`);
+      return 'Thời gian xử lý quá lâu. Vui lòng thử lại với truy vấn ngắn gọn hơn.';
+    }
+    
+    console.error(`Summarization error: ${error.message}`);
+    return 'Không thể tạo tóm tắt từ kết quả tìm kiếm. Vui lòng thử lại.';
   }
 }
 
@@ -396,10 +501,10 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.6',
+      version: '1.0.7',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
-      dependencies: { supabase: 'connected', openRouter: 'connected' }
+      dependencies: { supabase: 'connected', openRouter: 'connected', webSearch: 'enabled' }
     });
   } catch (error) {
     console.error(`Health check failed: ${error.message}`);
@@ -496,7 +601,7 @@ app.post('/api/login', authLimiter, async (req, res) => {
   }
 });
 
-// Chat endpoint
+// Chat endpoint with improved web search
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { messages, chatId, prompt } = req.body;
@@ -568,18 +673,51 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     let aiMessage = '';
     let enhancedPromptUsed = false;
     let finalPrompt = userContent;
-    const isWebSearch = userContent.toLowerCase().startsWith('tìm kiếm web:');
+    const searchKeywords = ['tìm kiếm web:', 'web search:', 'search:', 'tìm:', 'tra cứu:', 'search web:'];
+    const isWebSearch = searchKeywords.some(keyword => 
+      userContent.toLowerCase().startsWith(keyword.toLowerCase())
+    );
 
     if (isWebSearch) {
-      const searchQuery = userContent.replace(/^tìm kiếm web:/i, '').trim();
-      const searchResults = await searchDuckDuckGo(searchQuery);
+      console.log(`🔍 Processing web search request...`);
+      const searchStartTime = Date.now();
+      
+      // Extract query
+      let searchQuery = userContent;
+      for (const keyword of searchKeywords) {
+        if (userContent.toLowerCase().startsWith(keyword.toLowerCase())) {
+          searchQuery = userContent.substring(keyword.length).trim();
+          break;
+        }
+      }
+      
+      console.log(`Extracted search query: "${searchQuery}"`);
+      
+      // Execute search with timeout
+      const searchResults = await Promise.race([
+        searchWithPrioritySources(searchQuery, 12000),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Overall search timeout')), 15000)
+        )
+      ]).catch(err => {
+        console.error(`Search failed: ${err.message}`);
+        return [];
+      });
       
       if (searchResults.length > 0) {
-        aiMessage = await summarizeWithAI(searchQuery, searchResults);
+        console.log(`Found ${searchResults.length} search results, summarizing...`);
+        aiMessage = await summarizeSearchResults(searchQuery, searchResults, 8000);
       } else {
-        aiMessage = 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
+        aiMessage = 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác hoặc cụ thể hơn.';
       }
+      
+      const searchElapsed = ((Date.now() - searchStartTime) / 1000).toFixed(2);
+      console.log(`✓ Web search completed in ${searchElapsed}s`);
+      aiMessage += `\n\n*⏱️ Thời gian tìm kiếm: ${searchElapsed}s*`;
+      
     } else {
+      // Regular AI chat (not web search)
+      
       // Enhance prompt if provided
       if (prompt) {
         console.log(`Enhancing chat prompt...`);
@@ -672,7 +810,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       chatId: newChatId,
       timestamp: savedMessage.timestamp,
       enhancedPrompt: enhancedPromptUsed ? finalPrompt : undefined,
-      originalPrompt: enhancedPromptUsed ? userContent : undefined
+      originalPrompt: enhancedPromptUsed ? userContent : undefined,
+      isWebSearch: isWebSearch
     });
   } catch (err) {
     console.error(`Chat endpoint error: ${err.message}`);
@@ -1043,6 +1182,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
   console.info(`AI-enhanced prompts: enabled (chat and image)`);
+  console.info(`Web search: enabled (10-15s fast search)`);
   console.info(`Smart polling verification: enabled (2s initial + 5x0.8s checks)`);
 });
 
