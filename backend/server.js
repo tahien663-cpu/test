@@ -48,7 +48,7 @@ app.use(helmet({
       styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'"],
       imgSrc: ["'self'", "data:", "https:", "http:"],
-      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com"],
+      connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com", "https://en.wikipedia.org"],
       fontSrc: ["'self'"],
       objectSrc: ["'none'"],
       mediaSrc: ["'self'"],
@@ -120,7 +120,7 @@ app.get('/', (req, res) => {
   res.status(200).json({
     status: 'OK',
     message: 'Welcome to Hein AI Backend API',
-    version: '1.0.7',
+    version: '2.0.0',
     endpoints: [
       '/health',
       '/api/register',
@@ -132,11 +132,12 @@ app.get('/', (req, res) => {
       '/api/message/:messageId'
     ],
     features: [
-      'AI-enhanced image prompts (70 chars max)',
-      'AI-enhanced chat prompts (200 chars max)',
-      'Fast web search (10-15s with priority sources)',
-      'Optimized smart polling (2s + 5x0.8s)',
-      'Rate limit: 15 images/min'
+      '🧠 Smart auto web search (AI decides when to search)',
+      '⚡ Multi-source search (DuckDuckGo + Wikipedia)',
+      '🎯 Priority source ranking',
+      '⏱️ Optimized speed (<30s guaranteed)',
+      '🤖 AI-enhanced prompts (chat & image)',
+      '🔒 Secure with rate limiting'
     ]
   });
 });
@@ -221,6 +222,311 @@ async function enhancePrompt(userPrompt, isImagePrompt = false) {
   }
 }
 
+// AI-powered decision: Should we search the web?
+async function shouldSearchWeb(userMessage) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    
+    const decisionPrompt = [
+      {
+        role: 'system',
+        content: `You are a search decision assistant. Analyze if the user's query requires real-time web search.
+Reply ONLY with "YES" or "NO" (nothing else).
+
+Search YES for:
+- Current events, news, recent updates
+- Real-time data (weather, stocks, scores)
+- Specific facts you might not know
+- Questions about people, places, or events after January 2025
+- Requests explicitly asking for current/latest info
+
+Search NO for:
+- General knowledge, theories, explanations
+- Coding help, math problems
+- Creative writing, personal advice
+- Philosophical discussions
+- How-to questions with stable answers`
+      },
+      {
+        role: 'user',
+        content: `Should I search the web for this query?\n\nQuery: "${userMessage}"\n\nRespond only YES or NO.`
+      }
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-chat-v3.1:free',
+        messages: decisionPrompt,
+        temperature: 0.1,
+        max_tokens: 10
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      console.warn(`Search decision failed, defaulting to NO`);
+      return false;
+    }
+
+    const data = await response.json();
+    const decision = data.choices?.[0]?.message?.content?.trim().toUpperCase() || 'NO';
+    
+    console.log(`🤖 Search decision: ${decision} for query: "${userMessage}"`);
+    return decision === 'YES';
+    
+  } catch (error) {
+    console.warn(`Search decision error: ${error.message}, defaulting to NO`);
+    return false;
+  }
+}
+
+// Multi-source web search with parallel requests
+async function searchWithPrioritySources(query, timeoutMs = 25000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    console.log(`🔍 Starting multi-source web search for: "${query}"`);
+    const startTime = Date.now();
+    
+    const encodedQuery = encodeURIComponent(query);
+    const results = [];
+    
+    // Priority domains for ranking
+    const priorityDomains = [
+      'wikipedia.org', 'vnexpress.net', 'thanhnien.vn', 'tuoitre.vn',
+      'bbc.com', 'reuters.com', 'nytimes.com', 'cnn.com', 'theguardian.com',
+      'stackoverflow.com', 'github.com', 'medium.com'
+    ];
+    
+    // Search Promise 1: DuckDuckGo API
+    const duckDuckGoSearch = async () => {
+      try {
+        const searchUrl = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
+        const response = await fetch(searchUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          signal: controller.signal
+        });
+
+        if (!response.ok) return [];
+
+        const data = await response.json();
+        const ddgResults = [];
+        
+        if (data.Abstract && data.Abstract.length > 0) {
+          ddgResults.push({
+            title: data.Heading || 'Instant Answer',
+            snippet: data.Abstract,
+            link: data.AbstractURL || '',
+            source: data.AbstractSource || 'DuckDuckGo',
+            priority: 10
+          });
+        }
+        
+        if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
+          for (const topic of data.RelatedTopics.slice(0, 6)) {
+            if (topic.Text && topic.FirstURL) {
+              try {
+                const domain = new URL(topic.FirstURL).hostname;
+                const isPriority = priorityDomains.some(pd => domain.includes(pd));
+                
+                ddgResults.push({
+                  title: topic.Text.split(' - ')[0] || 'Related Topic',
+                  snippet: topic.Text,
+                  link: topic.FirstURL,
+                  source: domain,
+                  priority: isPriority ? 5 : 1
+                });
+              } catch (urlError) {
+                // Skip invalid URLs
+              }
+            }
+          }
+        }
+        
+        return ddgResults;
+      } catch (error) {
+        console.warn(`DuckDuckGo search failed: ${error.message}`);
+        return [];
+      }
+    };
+
+    // Search Promise 2: Wikipedia Direct
+    const wikipediaSearch = async () => {
+      try {
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodedQuery}&format=json&srlimit=3&origin=*`;
+        const response = await fetch(wikiUrl, { signal: controller.signal });
+        
+        if (!response.ok) return [];
+        
+        const data = await response.json();
+        const wikiResults = [];
+        
+        if (data.query && data.query.search) {
+          for (const item of data.query.search) {
+            wikiResults.push({
+              title: item.title,
+              snippet: item.snippet.replace(/<[^>]*>/g, ''),
+              link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+              source: 'wikipedia.org',
+              priority: 8
+            });
+          }
+        }
+        
+        return wikiResults;
+      } catch (error) {
+        console.warn(`Wikipedia search failed: ${error.message}`);
+        return [];
+      }
+    };
+
+    // Execute searches in parallel with timeout
+    const [ddgResults, wikiResults] = await Promise.allSettled([
+      Promise.race([duckDuckGoSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('DDG timeout')), 12000))]),
+      Promise.race([wikipediaSearch(), new Promise((_, rej) => setTimeout(() => rej(new Error('Wiki timeout')), 12000))])
+    ]);
+
+    // Combine results
+    if (ddgResults.status === 'fulfilled' && ddgResults.value) {
+      results.push(...ddgResults.value);
+    }
+    if (wikiResults.status === 'fulfilled' && wikiResults.value) {
+      results.push(...wikiResults.value);
+    }
+
+    // Remove duplicates and sort by priority
+    const uniqueResults = Array.from(
+      new Map(results.map(r => [r.link, r])).values()
+    );
+    
+    uniqueResults.sort((a, b) => b.priority - a.priority);
+    const topResults = uniqueResults.slice(0, 8);
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✓ Multi-source search completed in ${elapsed}s, found ${topResults.length} results`);
+    
+    clearTimeout(timeout);
+    return topResults;
+    
+  } catch (error) {
+    clearTimeout(timeout);
+    
+    if (error.name === 'AbortError') {
+      console.error(`Search timeout after ${timeoutMs}ms`);
+      return [];
+    }
+    
+    console.error(`Search error: ${error.message}`);
+    return [];
+  }
+}
+
+// Enhanced AI summarization with concise output and better formatting
+async function summarizeSearchResults(query, searchResults, timeoutMs = 6000) {
+  if (!searchResults || searchResults.length === 0) {
+    return 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
+  }
+  
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    console.log(`🤖 Starting AI summarization for ${searchResults.length} results...`);
+    const startTime = Date.now();
+    
+    // Format search results for AI - more concise
+    const formattedResults = searchResults
+      .slice(0, 6) // Limit to top 6 results for faster processing
+      .map((r, i) => `[${i + 1}] ${r.title}\nSource: ${r.source}\nInfo: ${r.snippet.substring(0, 200)}`)
+      .join('\n\n');
+    
+    const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
+    
+    const summaryMessages = [
+      {
+        role: 'system',
+        content: `You are an expert information synthesizer. Create clear, accurate summaries from search results.
+
+STRICT RULES:
+- Language: ${isVietnamese ? 'Vietnamese ONLY' : 'English ONLY'}
+- Start with direct answer (2-3 sentences)
+- Add 3-5 key bullet points (use • not numbers)
+- Cite sources: [1], [2], etc
+- Maximum 200 words total
+- Be factual, no speculation
+- Use clear formatting with line breaks`
+      },
+      {
+        role: 'user',
+        content: `Query: "${query}"\n\nSearch Results:\n${formattedResults}\n\nSummarize concisely with source citations.`
+      }
+    ];
+
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({
+        model: 'deepseek/deepseek-chat-v3.1:free',
+        messages: summaryMessages,
+        temperature: 0.2,
+        max_tokens: 350
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      throw new Error(`AI summarization failed: ${response.status}`);
+    }
+
+    const data = await response.json();
+    let summary = data.choices?.[0]?.message?.content?.trim() || 'Không thể tạo tóm tắt từ kết quả tìm kiếm.';
+    
+    // Clean up summary formatting
+    summary = summary.replace(/\*\*/g, ''); // Remove bold markdown
+    
+    // Add source references with links
+    const sourcesSection = '\n\n---\n**📚 Nguồn:**\n' + 
+      searchResults
+        .slice(0, 6)
+        .map((r, i) => `[${i + 1}] [${r.source}](${r.link})`)
+        .join(' • ');
+    
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+    console.log(`✓ Summarization completed in ${elapsed}s`);
+    
+    return summary + sourcesSection;
+    
+  } catch (error) {
+    clearTimeout(timeout);
+    
+    if (error.name === 'AbortError') {
+      console.error(`Summarization timeout after ${timeoutMs}ms`);
+      return 'Thời gian xử lý quá lâu. Vui lòng thử lại.';
+    }
+    
+    console.error(`Summarization error: ${error.message}`);
+    return 'Không thể tạo tóm tắt. Vui lòng thử lại.';
+  }
+}
+
 // Optimized smart polling function
 async function verifyImageWithPolling(imageUrl) {
   const MAX_ATTEMPTS = 5;
@@ -281,191 +587,6 @@ async function verifyImageWithPolling(imageUrl) {
   };
 }
 
-// Improved web search with priority sources and timeout
-async function searchWithPrioritySources(query, timeoutMs = 12000) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  
-  try {
-    console.log(`Starting priority web search for: "${query}"`);
-    const startTime = Date.now();
-    
-    // Priority sources - trusted domains
-    const priorityDomains = [
-      'wikipedia.org',
-      'vnexpress.net',
-      'thanhnien.vn',
-      'tuoitre.vn',
-      'bbc.com',
-      'reuters.com',
-      'nytimes.com',
-      'cnn.com',
-      'theguardian.com'
-    ];
-    
-    const encodedQuery = encodeURIComponent(query);
-    
-    // Use DuckDuckGo API
-    const searchUrl = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
-    
-    const response = await fetch(searchUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      },
-      signal: controller.signal
-    });
-
-    if (!response.ok) {
-      throw new Error(`Search API failed: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const results = [];
-    
-    // Extract instant answer if available
-    if (data.Abstract && data.Abstract.length > 0) {
-      results.push({
-        title: data.Heading || 'Instant Answer',
-        snippet: data.Abstract,
-        link: data.AbstractURL || data.AbstractSource || '',
-        source: data.AbstractSource || 'DuckDuckGo',
-        priority: 10
-      });
-    }
-    
-    // Extract related topics
-    if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
-      for (const topic of data.RelatedTopics.slice(0, 8)) {
-        if (topic.Text && topic.FirstURL) {
-          try {
-            const domain = new URL(topic.FirstURL).hostname;
-            const isPriority = priorityDomains.some(pd => domain.includes(pd));
-            
-            results.push({
-              title: topic.Text.split(' - ')[0] || 'Related Topic',
-              snippet: topic.Text,
-              link: topic.FirstURL,
-              source: domain,
-              priority: isPriority ? 5 : 1
-            });
-          } catch (urlError) {
-            console.warn(`Invalid URL in topic: ${topic.FirstURL}`);
-          }
-        }
-      }
-    }
-    
-    // Sort by priority and limit to top 5
-    results.sort((a, b) => b.priority - a.priority);
-    const topResults = results.slice(0, 5);
-    
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✓ Search completed in ${elapsed}s, found ${topResults.length} results`);
-    
-    clearTimeout(timeout);
-    return topResults;
-    
-  } catch (error) {
-    clearTimeout(timeout);
-    
-    if (error.name === 'AbortError') {
-      console.error(`Search timeout after ${timeoutMs}ms`);
-      return [];
-    }
-    
-    console.error(`Search error: ${error.message}`);
-    return [];
-  }
-}
-
-// Enhanced AI summarization with concise output
-async function summarizeSearchResults(query, searchResults, timeoutMs = 8000) {
-  if (!searchResults || searchResults.length === 0) {
-    return 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.';
-  }
-  
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  
-  try {
-    console.log(`Starting AI summarization for ${searchResults.length} results...`);
-    const startTime = Date.now();
-    
-    // Format search results for AI
-    const formattedResults = searchResults
-      .map((r, i) => `[${i + 1}] ${r.title} (${r.source})\n${r.snippet}`)
-      .join('\n\n');
-    
-    const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
-    
-    const summaryMessages = [
-      {
-        role: 'system',
-        content: `You are a concise information synthesizer. Create a brief, accurate summary from search results. Rules:
-- Use ${isVietnamese ? 'Vietnamese' : 'English'} language
-- Start with a direct answer (2-3 sentences)
-- Add 2-4 key bullet points with important facts
-- Cite sources using [1], [2] notation
-- Keep total response under 250 words
-- Be factual and objective, no speculation
-- Focus on the most relevant information`
-      },
-      {
-        role: 'user',
-        content: `Query: "${query}"\n\nSearch Results:\n${formattedResults}\n\nProvide a concise summary with key facts and source citations.`
-      }
-    ];
-
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${openRouterKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://hein1.onrender.com',
-        'X-Title': 'Hein AI'
-      },
-      body: JSON.stringify({
-        model: 'deepseek/deepseek-chat-v3.1:free',
-        messages: summaryMessages,
-        temperature: 0.3,
-        max_tokens: 400
-      }),
-      signal: controller.signal
-    });
-
-    clearTimeout(timeout);
-
-    if (!response.ok) {
-      throw new Error(`AI summarization failed: ${response.status}`);
-    }
-
-    const data = await response.json();
-    const summary = data.choices?.[0]?.message?.content?.trim() || 'Không thể tạo tóm tắt từ kết quả tìm kiếm.';
-    
-    // Add source references
-    const sourcesSection = '\n\n**📚 Nguồn tham khảo:**\n' + 
-      searchResults
-        .map((r, i) => `[${i + 1}] ${r.source}${r.link ? `: ${r.link}` : ''}`)
-        .join('\n');
-    
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
-    console.log(`✓ Summarization completed in ${elapsed}s`);
-    
-    return summary + sourcesSection;
-    
-  } catch (error) {
-    clearTimeout(timeout);
-    
-    if (error.name === 'AbortError') {
-      console.error(`Summarization timeout after ${timeoutMs}ms`);
-      return 'Thời gian xử lý quá lâu. Vui lòng thử lại với truy vấn ngắn gọn hơn.';
-    }
-    
-    console.error(`Summarization error: ${error.message}`);
-    return 'Không thể tạo tóm tắt từ kết quả tìm kiếm. Vui lòng thử lại.';
-  }
-}
-
 // JWT authentication middleware
 function authenticateToken(req, res, next) {
   const authHeader = req.headers['authorization'];
@@ -501,10 +622,10 @@ app.get('/health', async (req, res) => {
       status: 'OK',
       timestamp: new Date().toISOString(),
       service: 'Hein AI Backend',
-      version: '1.0.7',
+      version: '2.0.0',
       uptime: process.uptime(),
       memory: process.memoryUsage(),
-      dependencies: { supabase: 'connected', openRouter: 'connected', webSearch: 'enabled' }
+      dependencies: { supabase: 'connected', openRouter: 'connected', webSearch: 'enabled (multi-source)' }
     });
   } catch (error) {
     console.error(`Health check failed: ${error.message}`);
@@ -601,7 +722,7 @@ app.post('/api/login', authLimiter, async (req, res) => {
   }
 });
 
-// Chat endpoint with improved web search
+// Chat endpoint with smart auto web search
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { messages, chatId, prompt } = req.body;
@@ -656,48 +777,68 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     // Save user message
     const userContent = prompt ? sanitizeInput(prompt) : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
-    if (userContent) {
-      await supabase
-        .from('messages')
-        .insert([{
-          chat_id: newChatId,
-          role: 'user',
-          content: userContent,
-          timestamp: new Date().toISOString()
-        }]);
-    } else {
+    if (!userContent) {
       return res.status(400).json({ error: 'No valid user message or prompt provided', code: 'INVALID_INPUT' });
     }
 
-    // Check if this is a web search request
+    await supabase
+      .from('messages')
+      .insert([{
+        chat_id: newChatId,
+        role: 'user',
+        content: userContent,
+        timestamp: new Date().toISOString()
+      }]);
+
+    // SMART DECISION: Should we search the web?
+    const overallStartTime = Date.now();
     let aiMessage = '';
     let enhancedPromptUsed = false;
     let finalPrompt = userContent;
+    let wasWebSearch = false;
+    
+    // Check for explicit search keywords OR use AI decision
     const searchKeywords = ['tìm kiếm web:', 'web search:', 'search:', 'tìm:', 'tra cứu:', 'search web:'];
-    const isWebSearch = searchKeywords.some(keyword => 
+    const hasSearchKeyword = searchKeywords.some(keyword => 
       userContent.toLowerCase().startsWith(keyword.toLowerCase())
     );
-
-    if (isWebSearch) {
-      console.log(`🔍 Processing web search request...`);
-      const searchStartTime = Date.now();
+    
+    let shouldSearch = hasSearchKeyword;
+    
+    // If no explicit keyword, let AI decide (parallel with timeout)
+    if (!hasSearchKeyword) {
+      console.log(`🤔 No search keyword detected, asking AI for decision...`);
+      const decisionPromise = shouldSearchWeb(userContent);
+      const decisionWithTimeout = Promise.race([
+        decisionPromise,
+        new Promise(resolve => setTimeout(() => resolve(false), 5000))
+      ]);
       
-      // Extract query
+      shouldSearch = await decisionWithTimeout;
+    }
+
+    if (shouldSearch) {
+      wasWebSearch = true;
+      console.log(`🔍 Executing web search (${hasSearchKeyword ? 'keyword' : 'AI decision'})...`);
+      
+      // Extract query if keyword present
       let searchQuery = userContent;
-      for (const keyword of searchKeywords) {
-        if (userContent.toLowerCase().startsWith(keyword.toLowerCase())) {
-          searchQuery = userContent.substring(keyword.length).trim();
-          break;
+      if (hasSearchKeyword) {
+        for (const keyword of searchKeywords) {
+          if (userContent.toLowerCase().startsWith(keyword.toLowerCase())) {
+            searchQuery = userContent.substring(keyword.length).trim();
+            break;
+          }
         }
       }
       
-      console.log(`Extracted search query: "${searchQuery}"`);
+      console.log(`Search query: "${searchQuery}"`);
       
-      // Execute search with timeout
+      // Execute search with strict 25s timeout
       const searchResults = await Promise.race([
-        searchWithPrioritySources(searchQuery, 12000),
+        searchWithPrioritySources(searchQuery, 25000),
         new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Overall search timeout')), 15000)
+          setTimeout(() => reject(new Error('Search timeout')), 27000)
         )
       ]).catch(err => {
         console.error(`Search failed: ${err.message}`);
@@ -705,22 +846,29 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       });
       
       if (searchResults.length > 0) {
-        console.log(`Found ${searchResults.length} search results, summarizing...`);
-        aiMessage = await summarizeSearchResults(searchQuery, searchResults, 8000);
+        console.log(`Found ${searchResults.length} results, summarizing...`);
+        // Summarize with 6s timeout
+        aiMessage = await Promise.race([
+          summarizeSearchResults(searchQuery, searchResults, 6000),
+          new Promise((_, reject) => 
+            setTimeout(() => reject(new Error('Summarization timeout')), 8000)
+          )
+        ]).catch(err => {
+          console.error(`Summarization failed: ${err.message}`);
+          return 'Không thể tóm tắt kết quả. Vui lòng thử lại.';
+        });
       } else {
-        aiMessage = 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác hoặc cụ thể hơn.';
+        aiMessage = hasSearchKeyword 
+          ? 'Không tìm thấy kết quả phù hợp. Vui lòng thử lại với từ khóa khác.'
+          : 'Xin lỗi, tôi không tìm thấy thông tin liên quan. Bạn có thể hỏi câu khác không?';
       }
       
-      const searchElapsed = ((Date.now() - searchStartTime) / 1000).toFixed(2);
-      console.log(`✓ Web search completed in ${searchElapsed}s`);
-      aiMessage += `\n\n*⏱️ Thời gian tìm kiếm: ${searchElapsed}s*`;
-      
     } else {
-      // Regular AI chat (not web search)
+      // Regular AI chat (no search)
+      console.log(`💬 Processing as regular chat (no search needed)`);
       
       // Enhance prompt if provided
       if (prompt) {
-        console.log(`Enhancing chat prompt...`);
         const enhancedResult = await enhancePrompt(userContent, false);
         if (enhancedResult !== userContent) {
           finalPrompt = enhancedResult;
@@ -734,7 +882,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         content: sanitizeInput(m.content)
       }));
 
-      // Replace the last user message with the enhanced prompt (if applicable)
       if (enhancedPromptUsed) {
         mappedMessages[mappedMessages.length - 1] = {
           role: 'user',
@@ -742,7 +889,6 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         };
       }
 
-      // Add system prompt
       const messagesWithSystem = [
         {
           role: 'system',
@@ -751,23 +897,31 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         ...mappedMessages
       ];
 
-      // Regular AI response
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openRouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://hein1.onrender.com',
-          'X-Title': 'Hein AI'
-        },
-        body: JSON.stringify({
-          model: 'deepseek/deepseek-chat-v3.1:free',
-          messages: messagesWithSystem
-        })
+      // AI response with timeout
+      const response = await Promise.race([
+        fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openRouterKey}`,
+            'Content-Type': 'application/json',
+            'HTTP-Referer': 'https://hein1.onrender.com',
+            'X-Title': 'Hein AI'
+          },
+          body: JSON.stringify({
+            model: 'deepseek/deepseek-chat-v3.1:free',
+            messages: messagesWithSystem
+          })
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('AI timeout')), 15000)
+        )
+      ]).catch(err => {
+        console.error(`AI request failed: ${err.message}`);
+        return null;
       });
 
-      if (!response.ok) {
-        console.error(`OpenRouter error: ${response.status}`);
+      if (!response || !response.ok) {
+        console.error(`OpenRouter error: ${response?.status || 'timeout'}`);
         return res.status(500).json({ error: 'AI service error', code: 'AI_SERVICE_ERROR' });
       }
 
@@ -778,6 +932,15 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       }
     }
 
+    // Calculate total time
+    const totalElapsed = ((Date.now() - overallStartTime) / 1000).toFixed(2);
+    
+    // Add timing info for web search
+    if (wasWebSearch) {
+      aiMessage += `\n\n*⏱️ Total: ${totalElapsed}s*`;
+    }
+
+    // Save AI message
     const { data: savedMessage, error: messageError } = await supabase
       .from('messages')
       .insert([{
@@ -803,7 +966,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       })
       .eq('id', newChatId);
 
-    console.info(`Chat message processed: chatId=${newChatId}`);
+    console.info(`Chat message processed: chatId=${newChatId}, webSearch=${wasWebSearch}, time=${totalElapsed}s`);
     res.json({
       message: aiMessage,
       messageId: savedMessage.id,
@@ -811,7 +974,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
       timestamp: savedMessage.timestamp,
       enhancedPrompt: enhancedPromptUsed ? finalPrompt : undefined,
       originalPrompt: enhancedPromptUsed ? userContent : undefined,
-      isWebSearch: isWebSearch
+      isWebSearch: wasWebSearch,
+      searchTime: wasWebSearch ? `${totalElapsed}s` : undefined
     });
   } catch (err) {
     console.error(`Chat endpoint error: ${err.message}`);
@@ -1181,9 +1345,10 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.info(`Server started on port ${process.env.PORT || 3001}`);
   console.info(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.info(`CORS origins: ${allowedOrigins.join(', ')}`);
+  console.info(`Smart auto web search: enabled (AI-powered decisions)`);
+  console.info(`Multi-source search: DuckDuckGo + Wikipedia`);
+  console.info(`Search timeout: <30s guaranteed`);
   console.info(`AI-enhanced prompts: enabled (chat and image)`);
-  console.info(`Web search: enabled (10-15s fast search)`);
-  console.info(`Smart polling verification: enabled (2s initial + 5x0.8s checks)`);
 });
 
 process.on('SIGTERM', () => {
