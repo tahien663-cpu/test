@@ -12,6 +12,7 @@ import xss from 'xss';
 import { validate } from 'uuid';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import * as cheerio from 'cheerio';
 
 dotenv.config();
 
@@ -31,11 +32,12 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
+// DeepSeek luôn đầu tiên, timeout 60s
 const AI_MODELS = {
   chat: [
+    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 60000 },
     { id: 'google/gemini-2.0-flash-exp:free', timeout: 8000 },
     { id: 'qwen/qwen3-4b:free', timeout: 8000 },
-    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 12000 },
     { id: 'meta-llama/llama-3.3-8b-instruct:free', timeout: 12000 }
   ],
   quick: [
@@ -95,14 +97,7 @@ function getSortedModels(cat) {
   const ms = AI_MODELS[cat] || AI_MODELS.chat;
   const avail = ms.filter(m => !isModelRateLimited(m.id));
   if (!avail.length) return ms;
-  return avail.sort((a, b) => {
-    const sa = modelStats.get(a.id) || { successCount: 0, failCount: 0, avgResponseTime: 9999 };
-    const sb = modelStats.get(b.id) || { successCount: 0, failCount: 0, avgResponseTime: 9999 };
-    const ra = sa.successCount / Math.max(1, sa.successCount + sa.failCount);
-    const rb = sb.successCount / Math.max(1, sb.successCount + sb.failCount);
-    if (Math.abs(ra - rb) > 0.1) return rb - ra;
-    return sa.avgResponseTime - sb.avgResponseTime;
-  });
+  return avail;
 }
 
 async function callAISequential(msgs, cat = 'chat', opts = {}) {
@@ -161,57 +156,7 @@ async function callAISequential(msgs, cat = 'chat', opts = {}) {
 }
 
 async function callAIRacing(msgs, cat = 'chat', opts = {}) {
-  const ms = getSortedModels(cat).slice(0, 2);
-  const { temperature = 0.7, maxTokens = 500 } = opts;
-  
-  const races = ms.map(async m => {
-    const t0 = Date.now();
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), m.timeout);
-    
-    try {
-      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openRouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://hein1.onrender.com',
-          'X-Title': 'Hein AI'
-        },
-        body: JSON.stringify({ model: m.id, messages: msgs, temperature, max_tokens: maxTokens }),
-        signal: ctrl.signal
-      });
-      
-      clearTimeout(to);
-      const dt = Date.now() - t0;
-      
-      if (!r.ok) {
-        const err = await r.text().catch(() => '');
-        if (r.status === 429 || err.includes('rate limit')) markModelRateLimited(m.id, parseRetryAfter(err));
-        updateModelStats(m.id, false, dt);
-        throw new Error(`${m.id} failed`);
-      }
-      
-      const data = await r.json();
-      const content = data.choices?.[0]?.message?.content;
-      if (!content) {
-        updateModelStats(m.id, false, dt);
-        throw new Error('empty');
-      }
-      
-      updateModelStats(m.id, true, dt);
-      return { content, modelId: m.id, responseTime: dt };
-    } catch (e) {
-      clearTimeout(to);
-      throw e;
-    }
-  });
-  
-  try {
-    return await Promise.race(races);
-  } catch {
-    return await callAISequential(msgs, cat, opts);
-  }
+  return callAISequential(msgs, cat, opts);
 }
 
 async function enhancePrompt(txt, isImg = false) {
@@ -226,28 +171,211 @@ async function enhancePrompt(txt, isImg = false) {
   }
 }
 
-async function shouldSearchWeb(msg) {
+// BƯỚC 1: Hỏi AI nên tìm ở đâu
+async function suggestWebsites(query) {
   try {
     const r = await callAISequential([
-      { role: 'system', content: 'Analyze if query needs web search. Reply ONLY "YES" or "NO". YES for: current events, news, real-time data. NO for: general knowledge, coding, creative writing.' },
-      { role: 'user', content: `Search needed: "${msg}"` }
-    ], 'quick', { temperature: 0.1, maxTokens: 10 });
-    return r.content.trim().toUpperCase() === 'YES';
-  } catch {
-    return false;
+      { 
+        role: 'system', 
+        content: `You are a search expert. Suggest 3-5 best websites to find information about the query. 
+Format: JSON array only, no explanation.
+Example: ["https://www.apple.com", "https://www.gsmarena.com", "https://www.theverge.com"]
+Prioritize: official sites, tech review sites, news sites, wikipedia.
+For Vietnamese queries, include Vietnamese sites like vnexpress.net, tinhte.vn, etc.`
+      },
+      { role: 'user', content: `Best websites to search for: "${query}"` }
+    ], 'quick', { temperature: 0.3, maxTokens: 200 });
+    
+    const content = r.content.trim();
+    const jsonMatch = content.match(/\[.*?\]/s);
+    if (!jsonMatch) return [];
+    
+    const sites = JSON.parse(jsonMatch[0]);
+    return sites.filter(s => s.startsWith('http')).slice(0, 5);
+  } catch (e) {
+    console.error('Error suggesting websites:', e);
+    return [];
   }
 }
 
-async function searchWeb(q, timeout = 20000) {
+// BƯỚC 2: Tìm kiếm trên Google/DuckDuckGo với site-specific
+async function searchSpecificSites(query, sites) {
+  const results = [];
+  
+  for (const site of sites) {
+    try {
+      const domain = new URL(site).hostname.replace('www.', '');
+      const searchQuery = `${query} site:${domain}`;
+      const eq = encodeURIComponent(searchQuery);
+      
+      // Tìm trên DuckDuckGo
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 8000);
+      
+      const r = await fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, {
+        signal: ctrl.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      });
+      
+      clearTimeout(timeout);
+      
+      if (r.ok) {
+        const data = await r.json();
+        
+        if (data.Abstract) {
+          results.push({
+            title: data.Heading || 'Result',
+            snippet: data.Abstract,
+            link: data.AbstractURL || site,
+            source: domain,
+            priority: 10
+          });
+        }
+        
+        if (data.RelatedTopics) {
+          data.RelatedTopics.slice(0, 3).forEach(t => {
+            if (t.Text && t.FirstURL && t.FirstURL.includes(domain)) {
+              results.push({
+                title: t.Text.split(' - ')[0],
+                snippet: t.Text,
+                link: t.FirstURL,
+                source: domain,
+                priority: 8
+              });
+            }
+          });
+        }
+      }
+    } catch (e) {
+      console.error(`Error searching ${site}:`, e.message);
+    }
+  }
+  
+  return results;
+}
+
+// BƯỚC 3: Crawl nội dung từ các trang web
+async function crawlWebpage(url) {
+  try {
+    const ctrl = new AbortController();
+    const timeout = setTimeout(() => ctrl.abort(), 10000);
+    
+    const r = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1'
+      }
+    });
+    
+    clearTimeout(timeout);
+    
+    if (!r.ok) return null;
+    
+    const html = await r.text();
+    const $ = cheerio.load(html);
+    
+    // Xóa các element không cần thiết
+    $('script, style, nav, header, footer, iframe, noscript').remove();
+    
+    // Lấy title
+    const title = $('title').text().trim() || $('h1').first().text().trim();
+    
+    // Lấy nội dung chính
+    let content = '';
+    
+    // Thử các selector phổ biến cho nội dung chính
+    const contentSelectors = [
+      'article',
+      '[role="main"]',
+      'main',
+      '.content',
+      '.article-content',
+      '.post-content',
+      '#content',
+      '.entry-content'
+    ];
+    
+    for (const selector of contentSelectors) {
+      const elem = $(selector);
+      if (elem.length > 0) {
+        content = elem.text();
+        break;
+      }
+    }
+    
+    // Nếu không tìm thấy, lấy body
+    if (!content) {
+      content = $('body').text();
+    }
+    
+    // Làm sạch content
+    content = content
+      .replace(/\s+/g, ' ')
+      .replace(/\n+/g, '\n')
+      .trim()
+      .substring(0, 3000); // Giới hạn 3000 ký tự
+    
+    return { title, content, url };
+  } catch (e) {
+    console.error(`Error crawling ${url}:`, e.message);
+    return null;
+  }
+}
+
+// BƯỚC 4: Tổng hợp thông tin từ nhiều nguồn
+async function smartSearch(query) {
+  console.log(`\n🔍 Smart Search: "${query}"`);
+  
+  // Bước 1: Hỏi AI nên tìm ở đâu
+  console.log('📍 Step 1: Suggesting websites...');
+  const suggestedSites = await suggestWebsites(query);
+  console.log(`   Found ${suggestedSites.length} suggested sites:`, suggestedSites);
+  
+  if (suggestedSites.length === 0) {
+    // Fallback: dùng search thông thường
+    return await searchWebFallback(query);
+  }
+  
+  // Bước 2: Tìm URLs cụ thể từ các site đó
+  console.log('🔎 Step 2: Searching specific sites...');
+  const searchResults = await searchSpecificSites(query, suggestedSites);
+  console.log(`   Found ${searchResults.length} search results`);
+  
+  // Bước 3: Crawl nội dung từ top URLs
+  console.log('📥 Step 3: Crawling webpages...');
+  const topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 3);
+  const crawlPromises = topUrls.map(url => crawlWebpage(url));
+  const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
+  console.log(`   Crawled ${crawledData.length} pages successfully`);
+  
+  // Bước 4: Tổng hợp kết quả
+  return {
+    query,
+    suggestedSites,
+    searchResults,
+    crawledData,
+    totalSources: crawledData.length
+  };
+}
+
+// Fallback search nếu smart search thất bại
+async function searchWebFallback(query) {
   const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), timeout);
+  const timeout = setTimeout(() => ctrl.abort(), 20000);
   
   try {
-    const eq = encodeURIComponent(q);
-    const prio = ['wikipedia.org', 'britannica.com', 'vnexpress.net', 'bbc.com', 'stackoverflow.com'];
+    const eq = encodeURIComponent(query);
     
     const searches = [
-      fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, { signal: ctrl.signal, headers: { 'User-Agent': 'Mozilla/5.0' } })
+      fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, {
+        signal: ctrl.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0' }
+      })
         .then(r => r.json())
         .then(d => {
           const res = [];
@@ -256,7 +384,7 @@ async function searchWeb(q, timeout = 20000) {
             d.RelatedTopics.slice(0, 5).forEach(t => {
               if (t.Text && t.FirstURL) {
                 const dom = new URL(t.FirstURL).hostname;
-                res.push({ title: t.Text.split(' - ')[0], snippet: t.Text, link: t.FirstURL, source: dom, priority: prio.some(p => dom.includes(p)) ? 5 : 1 });
+                res.push({ title: t.Text.split(' - ')[0], snippet: t.Text, link: t.FirstURL, source: dom, priority: 5 });
               }
             });
           }
@@ -272,31 +400,129 @@ async function searchWeb(q, timeout = 20000) {
 
     const settled = await Promise.allSettled(searches.map(p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])));
     const res = settled.filter(r => r.status === 'fulfilled' && Array.isArray(r.value)).flatMap(r => r.value);
-    const uniq = Array.from(new Map(res.map(r => [r.link, r])).values());
-    uniq.sort((a, b) => b.priority - a.priority);
     
-    clearTimeout(to);
-    return uniq.slice(0, 8);
+    clearTimeout(timeout);
+    
+    return {
+      query,
+      suggestedSites: [],
+      searchResults: res,
+      crawledData: [],
+      totalSources: res.length
+    };
   } catch {
-    clearTimeout(to);
-    return [];
+    clearTimeout(timeout);
+    return { query, suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
   }
 }
 
-async function summarizeSearch(q, res) {
-  if (!res || !res.length) return 'Không tìm thấy kết quả.';
+// Tóm tắt kết quả tìm kiếm bằng AI
+async function summarizeSearchResults(query, searchData) {
+  if (searchData.totalSources === 0) {
+    return 'Không tìm thấy thông tin phù hợp.';
+  }
+  
   try {
-    const fmt = res.slice(0, 6).map((r, i) => `[${i + 1}] ${r.title}\n${r.snippet.substring(0, 200)}`).join('\n\n');
-    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(q);
+    // Chuẩn bị dữ liệu để gửi cho AI
+    let context = '';
+    
+    // Thêm nội dung đã crawl (ưu tiên cao nhất)
+    if (searchData.crawledData && searchData.crawledData.length > 0) {
+      context += '=== CRAWLED CONTENT ===\n\n';
+      searchData.crawledData.forEach((data, i) => {
+        context += `[${i + 1}] ${data.title}\nURL: ${data.url}\n${data.content.substring(0, 1000)}\n\n`;
+      });
+    }
+    
+    // Thêm kết quả search
+    if (searchData.searchResults && searchData.searchResults.length > 0) {
+      context += '\n=== SEARCH RESULTS ===\n\n';
+      searchData.searchResults.slice(0, 5).forEach((r, i) => {
+        context += `[${i + 1}] ${r.title}\n${r.snippet.substring(0, 200)}\nSource: ${r.source}\n\n`;
+      });
+    }
+    
+    // Giới hạn context length
+    context = context.substring(0, 4000);
+    
+    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
+    
     const r = await callAISequential([
-      { role: 'system', content: `Synthesize search results. Language: ${isVN ? 'Vietnamese' : 'English'}. Format: 2-3 sentence answer, then 3-4 bullet points. Cite [1], [2]. Max 200 words.` },
-      { role: 'user', content: `Query: "${q}"\n\nResults:\n${fmt}` }
-    ], 'research', { temperature: 0.2, maxTokens: 350 });
-    const sum = r.content.trim().replace(/\*\*/g, '');
-    const src = '\n\n---\n**Nguồn:**\n' + res.slice(0, 6).map((r, i) => `[${i + 1}] [${r.source}](${r.link})`).join(' • ');
-    return sum + src;
+      { 
+        role: 'system', 
+        content: `You are a research assistant. Synthesize the information to answer the query.
+Language: ${isVN ? 'Vietnamese' : 'English'}
+Format:
+1. Direct answer (2-3 sentences)
+2. Key points (3-5 bullet points with details)
+3. Cite sources using [1], [2], etc.
+Be comprehensive but concise. Max 400 words.`
+      },
+      { role: 'user', content: `Query: "${query}"\n\nInformation:\n${context}` }
+    ], 'chat', { temperature: 0.3, maxTokens: 600 });
+    
+    let summary = r.content.trim().replace(/\*\*/g, '');
+    
+    // Thêm nguồn tham khảo
+    const sources = [];
+    if (searchData.crawledData) {
+      searchData.crawledData.forEach((d, i) => {
+        const domain = new URL(d.url).hostname.replace('www.', '');
+        sources.push(`[${i + 1}] [${domain}](${d.url})`);
+      });
+    }
+    if (searchData.searchResults && sources.length < 5) {
+      searchData.searchResults.slice(0, 5 - sources.length).forEach((r, i) => {
+        if (r.link) sources.push(`[${sources.length + 1}] [${r.source}](${r.link})`);
+      });
+    }
+    
+    if (sources.length > 0) {
+      summary += '\n\n---\n**Nguồn tham khảo:**\n' + sources.join(' • ');
+    }
+    
+    return summary;
+  } catch (e) {
+    console.error('Error summarizing:', e);
+    return 'Đã tìm thấy thông tin nhưng không thể tổng hợp. Vui lòng thử lại.';
+  }
+}
+
+// Kiểm tra có cần search không
+async function shouldSearchWeb(msg) {
+  try {
+    const searchKeywords = [
+      'tìm kiếm', 'tra cứu', 'là gì', 'là ai', 'tìm hiểu', 'thông số', 'giá', 'cấu hình',
+      'review', 'đánh giá', 'so sánh', 'tin tức', 'mới nhất', 'hiện tại', 'specs',
+      'địa chỉ', 'khi nào', 'ở đâu', 'như thế nào', 'bao nhiêu', 'chi tiết',
+      'thông tin về', 'đặc điểm', 'tính năng', 'có gì', 'ra mắt',
+      'search', 'find', 'what is', 'who is', 'learn about', 'price', 'latest',
+      'current', 'news', 'where', 'when', 'how', 'compare', 'features'
+    ];
+    
+    const msgLower = msg.toLowerCase();
+    
+    if (searchKeywords.some(kw => msgLower.includes(kw))) {
+      return true;
+    }
+    
+    if (msgLower.includes('?') && (
+      msgLower.includes('năm') || msgLower.includes('year') ||
+      msgLower.includes('hôm nay') || msgLower.includes('today') ||
+      msgLower.includes('hiện nay') || msgLower.includes('currently')
+    )) {
+      return true;
+    }
+    
+    const r = await callAISequential([
+      { role: 'system', content: 'Analyze if query needs web search. Reply ONLY "YES" or "NO". YES for: current events, news, real-time data, product info, prices, specs. NO for: general knowledge, coding, creative writing.' },
+      { role: 'user', content: `Search needed: "${msg}"` }
+    ], 'quick', { temperature: 0.1, maxTokens: 10 });
+    
+    return r.content.trim().toUpperCase() === 'YES';
   } catch {
-    return 'Không thể tạo tóm tắt.';
+    const basicKeywords = ['tìm kiếm', 'search', 'là gì', 'what is'];
+    return basicKeywords.some(kw => msg.toLowerCase().includes(kw));
   }
 }
 
@@ -315,7 +541,7 @@ async function verifyImage(url) {
   return { success: false, attempts: 3 };
 }
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], scriptSrc: ["'self'"], imgSrc: ["'self'", "data:", "https:", "http:"], connectSrc: ["'self'", "https://openrouter.ai", "https://image.pollinations.ai", "https://api.duckduckgo.com", "https://en.wikipedia.org"] } } }));
+app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], scriptSrc: ["'self'"], imgSrc: ["'self'", "data:", "https:", "http:"], connectSrc: ["'self'", "https:", "http:"] } } }));
 app.set('trust proxy', 1);
 
 const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: { error: 'Too many requests' } });
@@ -344,7 +570,7 @@ function authenticateToken(req, res, next) {
   });
 }
 
-app.get('/', (req, res) => res.json({ status: 'OK', version: '3.1', features: ['Speed optimized', 'Racing + Sequential', 'Multi-source search', 'Rate limit handling'] }));
+app.get('/', (req, res) => res.json({ status: 'OK', version: '4.0', features: ['DeepSeek Priority', 'Smart Web Crawling', 'AI-Suggested Sources', 'Multi-page Analysis'] }));
 
 app.get('/health', async (req, res) => {
   try {
@@ -442,17 +668,20 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
           }
         }
       }
-      const sres = await searchWeb(q, 20000).catch(() => []);
-      if (sres.length > 0) {
-        srcs = [...new Set(sres.map(r => r.source))].slice(0, 5);
-        msg = await summarizeSearch(q, sres);
-        model = 'research';
+      
+      console.log(`\n🔍 Performing smart search for: "${q}"`);
+      const searchData = await smartSearch(q);
+      
+      if (searchData.totalSources > 0) {
+        srcs = searchData.suggestedSites.slice(0, 5);
+        msg = await summarizeSearchResults(q, searchData);
+        model = 'smart-search';
       } else {
-        msg = 'Không tìm thấy kết quả.';
+        msg = 'Không tìm thấy thông tin phù hợp. Vui lòng thử câu hỏi khác.';
       }
     } else {
       const mm = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: sanitizeInput(m.content) }));
-      const sys = { role: 'system', content: 'You are Hein, an AI by Hien2309. Answer in user\'s language. Be accurate, concise, practical.' };
+      const sys = { role: 'system', content: 'You are Hein, an AI assistant by Hien2309. Answer in user\'s language. Be accurate, concise, and helpful.' };
       try {
         const r = await callAIRacing([sys, ...mm], 'chat', { temperature: 0.7, maxTokens: 500 });
         msg = r.content;
@@ -463,7 +692,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     const dt = ((Date.now() - t0) / 1000).toFixed(2);
-    msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources*` : `\n\n*${model.split('/')[1]} | ${dt}s*`;
+    msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources crawled*` : `\n\n*${model.split('/')[1]} | ${dt}s*`;
 
     const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: sanitizeInput(msg), timestamp: new Date().toISOString() }]).select().single();
     if (me) return res.status(500).json({ error: 'Failed to save' });
@@ -471,7 +700,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     await supabase.from('chats').update({ last_message: sanitizeInput(uc).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', cid);
 
     res.json({ message: msg, messageId: sm.id, chatId: cid, timestamp: sm.timestamp, isWebSearch: isSearch, usedModel: model });
-  } catch {
+  } catch (e) {
+    console.error('Chat error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -608,14 +838,19 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\nOptimized Features:');
-  console.log('   Racing: 2 fastest models compete');
-  console.log('   Sequential fallback: all models');
-  console.log('   Smart rate limit handling');
-  console.log('   Auto-learning performance');
-  console.log('\nMulti-source search: DuckDuckGo + Wikipedia');
-  console.log('Security: Rate limiting + Helmet + CORS');
-  console.log('\nVersion: 3.1 - Speed Optimized');
+  console.log('\n🚀 Optimized Features:');
+  console.log('   ✓ DeepSeek Priority (60s timeout)');
+  console.log('   ✓ Smart Web Crawling');
+  console.log('   ✓ AI-Suggested Sources');
+  console.log('   ✓ Multi-page Content Analysis');
+  console.log('   ✓ Sequential fallback with all models');
+  console.log('\n🔍 Smart Search Pipeline:');
+  console.log('   1. AI suggests best websites');
+  console.log('   2. Search specific sites');
+  console.log('   3. Crawl actual content');
+  console.log('   4. Synthesize with AI');
+  console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
+  console.log('\nVersion: 4.0 - Smart Search with Web Crawling');
   console.log('========================================\n');
 });
 
