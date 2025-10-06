@@ -176,25 +176,69 @@ async function enhancePrompt(txt, isImg = false) {
   }
 }
 
-function getFallbackSites(query, isVietnamese) {
+// ========== ENHANCED SEARCH FUNCTIONS ==========
+
+function detectQueryType(query) {
   const queryLower = query.toLowerCase();
   
-  if (queryLower.includes('iphone') || queryLower.includes('apple')) {
-    return isVietnamese 
-      ? ['https://www.apple.com', 'https://tinhte.vn', 'https://genk.vn', 'https://www.gsmarena.com', 'https://vnexpress.net']
-      : ['https://www.apple.com', 'https://www.gsmarena.com', 'https://www.macrumors.com', 'https://www.theverge.com', 'https://www.cnet.com'];
+  // Detect product models (e.g., Dell 3501, iPhone 15, Galaxy S24)
+  const productPatterns = [
+    /\b(dell|hp|lenovo|asus|acer|msi)\s+[a-z]?\d{4,}/i,
+    /\b(iphone|galaxy|pixel|oneplus|xiaomi|oppo|vivo)\s+\d+/i,
+    /\b(macbook|thinkpad|inspiron|latitude|vostro|pavilion|vivobook)\s+[a-z]?\d+/i,
+    /\b(rtx|gtx|radeon)\s+\d{4}/i,
+    /\b(core\s+i\d|ryzen\s+\d)/i
+  ];
+  
+  if (productPatterns.some(p => p.test(query))) {
+    return 'product_specific';
   }
   
-  if (queryLower.includes('samsung') || queryLower.includes('galaxy')) {
-    return isVietnamese
-      ? ['https://www.samsung.com', 'https://tinhte.vn', 'https://www.gsmarena.com', 'https://genk.vn', 'https://vnexpress.net']
-      : ['https://www.samsung.com', 'https://www.gsmarena.com', 'https://www.androidauthority.com', 'https://www.theverge.com', 'https://www.cnet.com'];
+  // Detect brand queries
+  const brands = ['apple', 'samsung', 'dell', 'hp', 'lenovo', 'asus', 'xiaomi', 'oppo', 'vivo'];
+  if (brands.some(b => queryLower.includes(b))) {
+    return 'brand_related';
   }
   
+  // Detect technical queries
+  const techKeywords = ['specs', 'specification', 'review', 'benchmark', 'performance', 'cấu hình', 'thông số', 'đánh giá'];
+  if (techKeywords.some(k => queryLower.includes(k))) {
+    return 'technical';
+  }
+  
+  return 'general';
+}
+
+function getFallbackSites(query, isVietnamese) {
+  const queryLower = query.toLowerCase();
+  const queryType = detectQueryType(query);
+  
+  // Product-specific searches
+  if (queryType === 'product_specific') {
+    if (queryLower.includes('dell') || queryLower.includes('hp') || queryLower.includes('lenovo') || queryLower.includes('asus')) {
+      return isVietnamese
+        ? ['https://www.notebookcheck.net', 'https://www.dell.com', 'https://tinhte.vn', 'https://www.laptopmag.com', 'https://fptshop.com.vn', 'https://thegioididong.com', 'https://www.pcmag.com']
+        : ['https://www.notebookcheck.net', 'https://www.dell.com', 'https://www.laptopmag.com', 'https://www.pcmag.com', 'https://www.ultrabookreview.com', 'https://www.tomshardware.com', 'https://www.techradar.com'];
+    }
+    
+    if (queryLower.includes('iphone') || queryLower.includes('apple')) {
+      return isVietnamese 
+        ? ['https://www.apple.com', 'https://www.gsmarena.com', 'https://tinhte.vn', 'https://genk.vn', 'https://www.macrumors.com', 'https://thegioididong.com', 'https://fptshop.com.vn']
+        : ['https://www.apple.com', 'https://www.gsmarena.com', 'https://www.macrumors.com', 'https://www.theverge.com', 'https://www.cnet.com', 'https://9to5mac.com'];
+    }
+    
+    if (queryLower.includes('samsung') || queryLower.includes('galaxy')) {
+      return isVietnamese
+        ? ['https://www.samsung.com', 'https://www.gsmarena.com', 'https://tinhte.vn', 'https://genk.vn', 'https://www.androidauthority.com', 'https://thegioididong.com', 'https://fptshop.com.vn']
+        : ['https://www.samsung.com', 'https://www.gsmarena.com', 'https://www.androidauthority.com', 'https://www.theverge.com', 'https://www.cnet.com', 'https://www.androidcentral.com'];
+    }
+  }
+  
+  // Brand-related searches
   if (queryLower.includes('laptop') || queryLower.includes('computer') || queryLower.includes('pc')) {
     return isVietnamese
-      ? ['https://tinhte.vn', 'https://genk.vn', 'https://www.notebookcheck.net', 'https://thegioididong.com', 'https://vnexpress.net']
-      : ['https://www.notebookcheck.net', 'https://www.laptopmag.com', 'https://www.pcmag.com', 'https://www.theverge.com', 'https://www.tomshardware.com'];
+      ? ['https://www.notebookcheck.net', 'https://tinhte.vn', 'https://www.laptopmag.com', 'https://genk.vn', 'https://fptshop.com.vn', 'https://www.pcmag.com', 'https://thegioididong.com']
+      : ['https://www.notebookcheck.net', 'https://www.laptopmag.com', 'https://www.pcmag.com', 'https://www.theverge.com', 'https://www.tomshardware.com', 'https://www.techradar.com'];
   }
   
   return isVietnamese
@@ -205,37 +249,73 @@ function getFallbackSites(query, isVietnamese) {
 async function suggestWebsites(query) {
   try {
     const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
+    const queryType = detectQueryType(query);
+    
+    // Extract product model if present
+    let productModel = '';
+    const modelMatch = query.match(/\b([a-z]+)\s+([a-z]?\d{4,})/i);
+    if (modelMatch) {
+      productModel = modelMatch[0];
+    }
     
     const systemPrompt = isVietnamese 
-      ? `Bạn là chuyên gia tìm kiếm. Đề xuất 5 trang web tốt nhất để tìm thông tin về câu hỏi.
+      ? `Bạn là chuyên gia tìm kiếm sản phẩm công nghệ. Đề xuất 7 trang web TỐT NHẤT để tìm thông tin CHI TIẾT.
+
+Query: "${query}"
+${productModel ? `Sản phẩm cụ thể: ${productModel}` : ''}
+Loại query: ${queryType}
+
+YÊU CẦU:
+1. Ưu tiên trang CHÍNH THỨC của hãng (Dell.com, Apple.com, Samsung.com)
+2. Trang review chuyên sâu (NotebookCheck, GSMarena, LaptopMag, PCMag)
+3. Trang tin công nghệ uy tín (TinhTe, Genk, TheVerge, CNET)
+4. Trang bán hàng có review chi tiết (FPTShop, TGDĐ - chỉ với query tiếng Việt)
+5. Wikipedia (Wikipedia của sản phẩm hoặc hãng)
+
 CHỈ trả về mảng JSON, không giải thích gì thêm.
-Ví dụ: ["https://www.apple.com", "https://www.gsmarena.com", "https://www.theverge.com"]
-Ưu tiên: trang chính thức, trang review công nghệ, trang tin tức uy tín, wikipedia.
-Với câu hỏi tiếng Việt, bao gồm cả trang Việt: vnexpress.net, tinhte.vn, genk.vn, v.v.
-QUAN TRỌNG: Chỉ đưa ra link LIÊN QUAN TRỰC TIẾP nhất đến câu hỏi.`
-      : `You are a search expert. Suggest 5 best websites to find information about the query.
+Ví dụ: ["https://www.dell.com", "https://www.notebookcheck.net", "https://tinhte.vn"]
+
+QUAN TRỌNG: 
+- Với laptop Dell 3501, bao gồm: dell.com, notebookcheck.net, laptopmag.com, pcmag.com, tinhte.vn
+- Với điện thoại, bao gồm: trang chính thức, gsmarena.com, tinhte.vn
+- Đảm bảo link liên quan TRỰC TIẾP đến sản phẩm`
+      : `You are a tech product search expert. Suggest 7 BEST websites for DETAILED information.
+
+Query: "${query}"
+${productModel ? `Specific product: ${productModel}` : ''}
+Query type: ${queryType}
+
+REQUIREMENTS:
+1. Prioritize OFFICIAL brand sites (Dell.com, Apple.com, Samsung.com)
+2. In-depth review sites (NotebookCheck, GSMarena, LaptopMag, PCMag)
+3. Trusted tech news (TheVerge, CNET, TechRadar)
+4. Shopping sites with detailed reviews
+5. Wikipedia (product or brand Wikipedia)
+
 Return ONLY a JSON array, no explanation.
-Example: ["https://www.apple.com", "https://www.gsmarena.com", "https://www.theverge.com"]
-Prioritize: official sites, tech review sites, trusted news sites, wikipedia.
-For Vietnamese queries, include Vietnamese sites like vnexpress.net, tinhte.vn, genk.vn, etc.
-IMPORTANT: Only suggest links MOST RELEVANT to the query.`;
+Example: ["https://www.dell.com", "https://www.notebookcheck.net", "https://www.laptopmag.com"]
+
+IMPORTANT: 
+- For Dell 3501 laptop: include dell.com, notebookcheck.net, laptopmag.com, pcmag.com
+- For phones: include official site, gsmarena.com, tech news sites
+- Ensure DIRECTLY RELEVANT links to the product`;
 
     const userPrompt = isVietnamese 
-      ? `Gợi ý 5 trang web tốt nhất để tìm kiếm: "${query}"`
-      : `Suggest 5 best websites to search for: "${query}"`;
+      ? `Tìm 7 trang web TỐT NHẤT cho: "${query}". ${productModel ? `Sản phẩm: ${productModel}` : ''}`
+      : `Find 7 BEST websites for: "${query}". ${productModel ? `Product: ${productModel}` : ''}`;
 
     let r;
     try {
       r = await callAISequential([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
-      ], 'research', { temperature: 0.2, maxTokens: 300 });
+      ], 'research', { temperature: 0.1, maxTokens: 400 });
     } catch (researchError) {
       console.log('   Research model failed, trying quick models...');
       r = await callAISequential([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
-      ], 'quick', { temperature: 0.2, maxTokens: 300 });
+      ], 'quick', { temperature: 0.1, maxTokens: 400 });
     }
     
     const content = r.content.trim();
@@ -248,11 +328,21 @@ IMPORTANT: Only suggest links MOST RELEVANT to the query.`;
     const sites = JSON.parse(jsonMatch[0]);
     const validSites = sites
       .filter(s => typeof s === 'string' && s.startsWith('http'))
-      .slice(0, 5);
+      .slice(0, 7);
     
     if (validSites.length === 0) {
       console.log('   No valid sites found, using fallback');
       return getFallbackSites(query, isVietnamese);
+    }
+    
+    // Add fallback sites if not enough
+    if (validSites.length < 5) {
+      const fallback = getFallbackSites(query, isVietnamese);
+      fallback.forEach(site => {
+        if (validSites.length < 7 && !validSites.includes(site)) {
+          validSites.push(site);
+        }
+      });
     }
     
     return validSites;
@@ -264,12 +354,30 @@ IMPORTANT: Only suggest links MOST RELEVANT to the query.`;
 
 async function searchSpecificSites(query, sites) {
   const results = [];
+  const queryType = detectQueryType(query);
+  
+  // Extract product model for better searching
+  let productModel = '';
+  const modelMatch = query.match(/\b([a-z]+)\s+([a-z]?\d{4,})/i);
+  if (modelMatch) {
+    productModel = modelMatch[0];
+  }
   
   for (const site of sites) {
     try {
       const domain = new URL(site).hostname.replace('www.', '');
-      const searchQuery = `${query} site:${domain}`;
-      const eq = encodeURIComponent(searchQuery);
+      
+      // Enhanced search query based on query type
+      let searchQuery;
+      if (productModel) {
+        // For specific products, use exact model + related keywords
+        searchQuery = `${productModel} specifications review`;
+      } else {
+        searchQuery = query;
+      }
+      
+      const siteSearch = `${searchQuery} site:${domain}`;
+      const eq = encodeURIComponent(siteSearch);
       
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 8000);
@@ -295,15 +403,18 @@ async function searchSpecificSites(query, sites) {
         }
         
         if (data.RelatedTopics) {
-          data.RelatedTopics.slice(0, 3).forEach(t => {
-            if (t.Text && t.FirstURL && t.FirstURL.includes(domain)) {
-              results.push({
-                title: t.Text.split(' - ')[0],
-                snippet: t.Text,
-                link: t.FirstURL,
-                source: domain,
-                priority: 8
-              });
+          data.RelatedTopics.slice(0, 5).forEach(t => {
+            if (t.Text && t.FirstURL) {
+              const topicDomain = new URL(t.FirstURL).hostname.replace('www.', '');
+              if (topicDomain === domain || t.FirstURL.includes(domain)) {
+                results.push({
+                  title: t.Text.split(' - ')[0],
+                  snippet: t.Text,
+                  link: t.FirstURL,
+                  source: domain,
+                  priority: 8
+                });
+              }
             }
           });
         }
@@ -313,13 +424,18 @@ async function searchSpecificSites(query, sites) {
     }
   }
   
+  // If no results from search, try direct crawling of suggested sites
+  if (results.length === 0) {
+    console.log('   No search results, will rely on direct crawling');
+  }
+  
   return results;
 }
 
 async function crawlWebpage(url) {
   try {
     const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 10000);
+    const timeout = setTimeout(() => ctrl.abort(), 15000); // Increased timeout
     
     const r = await fetch(url, {
       signal: ctrl.signal,
@@ -340,12 +456,13 @@ async function crawlWebpage(url) {
     const html = await r.text();
     const $ = cheerio.load(html);
     
-    $('script, style, nav, header, footer, iframe, noscript').remove();
+    $('script, style, nav, header, footer, iframe, noscript, ads, .advertisement').remove();
     
     const title = $('title').text().trim() || $('h1').first().text().trim();
     
     let content = '';
     
+    // Enhanced content selectors for tech sites
     const contentSelectors = [
       'article',
       '[role="main"]',
@@ -354,7 +471,16 @@ async function crawlWebpage(url) {
       '.article-content',
       '.post-content',
       '#content',
-      '.entry-content'
+      '.entry-content',
+      '.product-description',
+      '.specs-table',
+      '.specifications',
+      '.review-content',
+      '.product-details',
+      '[itemprop="description"]',
+      '.description',
+      '.tech-specs',
+      '.product-info'
     ];
     
     for (const selector of contentSelectors) {
@@ -369,13 +495,38 @@ async function crawlWebpage(url) {
       content = $('body').text();
     }
     
+    // Extract structured data (specifications, reviews, etc.)
+    const specs = {};
+    
+    // Try to find specification tables
+    $('table.specs, table.specifications, .spec-table, .product-specs, .tech-specs').each((i, table) => {
+      $(table).find('tr').each((j, row) => {
+        const cells = $(row).find('td, th');
+        if (cells.length >= 2) {
+          const key = $(cells[0]).text().trim();
+          const value = $(cells[1]).text().trim();
+          if (key && value) {
+            specs[key] = value;
+          }
+        }
+      });
+    });
+    
+    // Add specs to content if found
+    if (Object.keys(specs).length > 0) {
+      content += '\n\n=== SPECIFICATIONS ===\n';
+      for (const [key, value] of Object.entries(specs)) {
+        content += `${key}: ${value}\n`;
+      }
+    }
+    
     content = content
       .replace(/\s+/g, ' ')
       .replace(/\n+/g, '\n')
       .trim()
-      .substring(0, 3000);
+      .substring(0, 5000); // Increased content length
     
-    return { title, content, url };
+    return { title, content, url, specs };
   } catch (e) {
     console.error(`Error crawling ${url}:`, e.message);
     return null;
@@ -384,6 +535,8 @@ async function crawlWebpage(url) {
 
 async function smartSearch(query) {
   console.log(`\n🔍 Smart Search: "${query}"`);
+  const queryType = detectQueryType(query);
+  console.log(`   Query type detected: ${queryType}`);
   
   try {
     console.log('📍 Step 1: Suggesting websites...');
@@ -400,12 +553,12 @@ async function smartSearch(query) {
     console.log(`   Found ${searchResults.length} search results`);
     
     console.log('📥 Step 3: Crawling webpages...');
-    let topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 3);
+    let topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 5);
     
     // Nếu không có search results, crawl trực tiếp suggested sites
     if (topUrls.length === 0) {
       console.log('   No search results, crawling suggested sites directly...');
-      topUrls = suggestedSites.slice(0, 3);
+      topUrls = suggestedSites.slice(0, 5);
     }
     
     if (topUrls.length === 0) {
@@ -421,6 +574,7 @@ async function smartSearch(query) {
     if (crawledData.length > 0 || searchResults.length > 0) {
       return {
         query,
+        queryType,
         suggestedSites,
         searchResults,
         crawledData,
@@ -479,6 +633,7 @@ async function searchWebFallback(query) {
     
     return {
       query,
+      queryType: 'general',
       suggestedSites: [],
       searchResults: res,
       crawledData: [],
@@ -486,7 +641,7 @@ async function searchWebFallback(query) {
     };
   } catch {
     clearTimeout(timeout);
-    return { query, suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
+    return { query, queryType: 'general', suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
   }
 }
 
@@ -503,7 +658,7 @@ async function summarizeSearchResults(query, searchData) {
     if (searchData.crawledData && searchData.crawledData.length > 0) {
       context += '=== CRAWLED CONTENT ===\n\n';
       searchData.crawledData.forEach((data, i) => {
-        context += `[${i + 1}] ${data.title}\nURL: ${data.url}\n${data.content.substring(0, 1500)}\n\n`;
+        context += `[${i + 1}] ${data.title}\nURL: ${data.url}\n${data.content.substring(0, 2000)}\n\n`;
         sourceCount++;
       });
     }
@@ -517,24 +672,36 @@ async function summarizeSearchResults(query, searchData) {
     }
     
     // Giới hạn context length
-    context = context.substring(0, 5000);
+    context = context.substring(0, 6000);
     
     const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
+    const queryType = searchData.queryType || 'general';
     
-    const r = await callAISequential([
-      { 
-        role: 'system', 
-        content: `You are a research assistant. Synthesize the information to answer the query.
+    let systemPrompt = `You are a research assistant. Synthesize the information to answer the query.
 Language: ${isVN ? 'Vietnamese' : 'English'}
+Query type: ${queryType}
+
 Format:
 1. Direct answer (2-3 sentences)
 2. Key points (bullet points with details)
 3. Cite sources using [1], [2], etc.
-Be comprehensive but concise. Max 500 words.
-If information is limited or unclear, acknowledge it honestly.`
-      },
+
+Be comprehensive but concise. Max 600 words.
+If information is limited or unclear, acknowledge it honestly.`;
+
+    // Enhanced prompt for product-specific queries
+    if (queryType === 'product_specific') {
+      systemPrompt += `\n\nFOR PRODUCT QUERIES:
+- Focus on specifications, features, pricing, and availability
+- Include technical details (processor, RAM, storage, display, battery, etc.)
+- Mention pros and cons if available
+- Compare with alternatives if mentioned`;
+    }
+    
+    const r = await callAISequential([
+      { role: 'system', content: systemPrompt },
       { role: 'user', content: `Query: "${query}"\n\nInformation:\n${context}` }
-    ], 'chat', { temperature: 0.3, maxTokens: 700 });
+    ], 'chat', { temperature: 0.3, maxTokens: 800 });
     
     let summary = r.content.trim().replace(/\*\*/g, '');
     
@@ -654,7 +821,7 @@ function authenticateToken(req, res, next) {
   });
 }
 
-app.get('/', (req, res) => res.json({ status: 'OK', version: '4.1', features: ['DeepSeek Priority', 'Smart Web Crawling', 'AI-Suggested Sources', 'Multi-page Analysis', 'DeepResearch Integration'] }));
+app.get('/', (req, res) => res.json({ status: 'OK', version: '4.2', features: ['DeepSeek Priority', 'Enhanced Smart Web Crawling', 'Product-Specific Search', 'Multi-page Analysis', 'DeepResearch Integration', 'Query Type Detection'] }));
 
 app.get('/health', async (req, res) => {
   try {
@@ -753,15 +920,15 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         }
       }
       
-      console.log(`\n🔍 Performing smart search for: "${q}"`);
+      console.log(`\n🔍 Performing enhanced smart search for: "${q}"`);
       const searchData = await smartSearch(q);
       
       if (searchData.totalSources > 0) {
         srcs = searchData.suggestedSites.slice(0, 5);
         msg = await summarizeSearchResults(q, searchData);
-        model = 'smart-search';
+        model = 'enhanced-smart-search';
       } else {
-        msg = 'Không tìm thấy thông tin phù hợp. Vui lòng thử câu hỏi khác.';
+        msg = 'Không tìm thấy thông tin phù hợp. Vui lòng thử câu hỏi khác hoặc cụ thể hóa hơn (ví dụ: "Dell Inspiron 15 3501 cấu hình").';
       }
     } else {
       const mm = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: sanitizeInput(m.content) }));
@@ -776,7 +943,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     }
 
     const dt = ((Date.now() - t0) / 1000).toFixed(2);
-    msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources crawled*` : `\n\n*${model.split('/')[1]} | ${dt}s*`;
+    msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources analyzed*` : `\n\n*${model.split('/')[1]} | ${dt}s*`;
 
     const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: sanitizeInput(msg), timestamp: new Date().toISOString() }]).select().single();
     if (me) return res.status(500).json({ error: 'Failed to save' });
@@ -922,21 +1089,28 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\n🚀 Optimized Features:');
+  console.log('\n🚀 Enhanced Features:');
   console.log('   ✓ DeepSeek Priority (60s timeout)');
-  console.log('   ✓ Smart Web Crawling with AI-suggested sources');
+  console.log('   ✓ Product-Specific Search Detection');
+  console.log('   ✓ Enhanced Web Crawling (specs extraction)');
   console.log('   ✓ DeepResearch for website suggestions');
-  console.log('   ✓ Multi-page Content Analysis');
+  console.log('   ✓ Multi-page Content Analysis (5000 chars/page)');
+  console.log('   ✓ Query Type Detection (product/brand/technical/general)');
   console.log('   ✓ Intelligent fallback system');
   console.log('   ✓ Sequential fallback with all models');
-  console.log('\n🔍 Smart Search Pipeline:');
-  console.log('   1. AI suggests best websites (DeepResearch)');
-  console.log('   2. Search specific sites (DuckDuckGo)');
-  console.log('   3. Crawl actual content (Cheerio)');
-  console.log('   4. Synthesize with AI (DeepSeek)');
-  console.log('   5. Fallback to standard search if needed');
+  console.log('\n🔍 Enhanced Smart Search Pipeline:');
+  console.log('   1. Detect query type (product/brand/tech/general)');
+  console.log('   2. AI suggests 7 best websites (DeepResearch)');
+  console.log('   3. Search specific sites with enhanced queries');
+  console.log('   4. Crawl actual content + extract specifications');
+  console.log('   5. Synthesize with context-aware AI (DeepSeek)');
+  console.log('   6. Fallback to standard search if needed');
+  console.log('\n📱 Supported Product Patterns:');
+  console.log('   • Laptops: Dell/HP/Lenovo/ASUS + model number');
+  console.log('   • Phones: iPhone/Galaxy/Pixel + version');
+  console.log('   • Components: RTX/GTX/Radeon + model');
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
-  console.log('\nVersion: 4.1 - Enhanced Error Handling & DeepResearch Integration');
+  console.log('\nVersion: 4.2 - Enhanced Product Search & Query Detection');
   console.log('========================================\n');
 });
 
