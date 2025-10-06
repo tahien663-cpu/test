@@ -19,10 +19,11 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Validate required environment variables
 const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
-    console.error(`Missing: ${envVar}`);
+    console.error(`Missing required environment variable: ${envVar}`);
     process.exit(1);
   }
 }
@@ -32,7 +33,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// DeepSeek luôn đầu tiên cho chat, DeepResearch cho nghiên cứu
+// AI Models with fallback strategy
 const AI_MODELS = {
   chat: [
     { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 60000 },
@@ -52,71 +53,100 @@ const AI_MODELS = {
   ]
 };
 
+// Model performance tracking
 const modelStats = new Map();
 const rateLimitTracker = new Map();
 
 function initModelStats() {
-  for (const cat in AI_MODELS) {
-    AI_MODELS[cat].forEach(m => {
-      modelStats.set(m.id, { successCount: 0, failCount: 0, avgResponseTime: 0, lastUsed: null });
-      rateLimitTracker.set(m.id, { isRateLimited: false, rateLimitUntil: null });
+  for (const category in AI_MODELS) {
+    AI_MODELS[category].forEach(model => {
+      modelStats.set(model.id, {
+        successCount: 0,
+        failCount: 0,
+        avgResponseTime: 0,
+        lastUsed: null
+      });
+      rateLimitTracker.set(model.id, {
+        isRateLimited: false,
+        rateLimitUntil: null
+      });
     });
   }
 }
 initModelStats();
 
-function isModelRateLimited(id) {
-  const t = rateLimitTracker.get(id);
-  if (!t || !t.isRateLimited) return false;
-  if (t.rateLimitUntil && Date.now() < t.rateLimitUntil) return true;
-  t.isRateLimited = false;
-  t.rateLimitUntil = null;
-  rateLimitTracker.set(id, t);
+function isModelRateLimited(modelId) {
+  const tracker = rateLimitTracker.get(modelId);
+  if (!tracker || !tracker.isRateLimited) return false;
+  
+  if (tracker.rateLimitUntil && Date.now() < tracker.rateLimitUntil) {
+    return true;
+  }
+  
+  // Reset rate limit
+  tracker.isRateLimited = false;
+  tracker.rateLimitUntil = null;
+  rateLimitTracker.set(modelId, tracker);
   return false;
 }
 
-function markModelRateLimited(id, secs) {
-  const t = rateLimitTracker.get(id) || {};
-  t.isRateLimited = true;
-  t.rateLimitUntil = Date.now() + secs * 1000;
-  rateLimitTracker.set(id, t);
+function markModelRateLimited(modelId, seconds = 60) {
+  const tracker = rateLimitTracker.get(modelId) || {};
+  tracker.isRateLimited = true;
+  tracker.rateLimitUntil = Date.now() + seconds * 1000;
+  rateLimitTracker.set(modelId, tracker);
+  console.log(`⚠️  Model ${modelId} rate limited for ${seconds}s`);
 }
 
-function parseRetryAfter(msg) {
-  const m = msg.match(/(\d+) seconds/i);
-  return m ? parseInt(m[1]) : 60;
+function parseRetryAfter(errorMessage) {
+  const match = errorMessage.match(/(\d+)\s*seconds?/i);
+  return match ? parseInt(match[1]) : 60;
 }
 
-function updateModelStats(id, ok, time) {
-  const s = modelStats.get(id);
-  if (!s) return;
-  if (ok) {
-    s.successCount++;
-    s.avgResponseTime = s.avgResponseTime === 0 ? time : s.avgResponseTime * 0.7 + time * 0.3;
-  } else s.failCount++;
-  s.lastUsed = Date.now();
-  modelStats.set(id, s);
-}
-
-function getSortedModels(cat) {
-  const ms = AI_MODELS[cat] || AI_MODELS.chat;
-  const avail = ms.filter(m => !isModelRateLimited(m.id));
-  if (!avail.length) return ms;
-  return avail;
-}
-
-async function callAISequential(msgs, cat = 'chat', opts = {}) {
-  const ms = getSortedModels(cat);
-  const { temperature = 0.7, maxTokens = 500 } = opts;
+function updateModelStats(modelId, success, responseTime) {
+  const stats = modelStats.get(modelId);
+  if (!stats) return;
   
-  for (const m of ms) {
-    if (isModelRateLimited(m.id)) continue;
-    const t0 = Date.now();
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), m.timeout);
+  if (success) {
+    stats.successCount++;
+    stats.avgResponseTime = stats.avgResponseTime === 0 
+      ? responseTime 
+      : stats.avgResponseTime * 0.7 + responseTime * 0.3;
+  } else {
+    stats.failCount++;
+  }
+  
+  stats.lastUsed = Date.now();
+  modelStats.set(modelId, stats);
+}
+
+function getSortedModels(category) {
+  const models = AI_MODELS[category] || AI_MODELS.chat;
+  const available = models.filter(m => !isModelRateLimited(m.id));
+  
+  if (available.length === 0) {
+    console.log(`⚠️  All models in ${category} are rate limited, using full list`);
+    return models;
+  }
+  
+  return available;
+}
+
+async function callAISequential(messages, category = 'chat', options = {}) {
+  const models = getSortedModels(category);
+  const { temperature = 0.7, maxTokens = 500 } = options;
+  
+  for (const model of models) {
+    if (isModelRateLimited(model.id)) continue;
+    
+    const startTime = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), model.timeout);
     
     try {
-      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      console.log(`🤖 Trying ${model.id}...`);
+      
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${openRouterKey}`,
@@ -124,55 +154,88 @@ async function callAISequential(msgs, cat = 'chat', opts = {}) {
           'HTTP-Referer': 'https://hein1.onrender.com',
           'X-Title': 'Hein AI'
         },
-        body: JSON.stringify({ model: m.id, messages: msgs, temperature, max_tokens: maxTokens }),
-        signal: ctrl.signal
+        body: JSON.stringify({
+          model: model.id,
+          messages: messages,
+          temperature: temperature,
+          max_tokens: maxTokens
+        }),
+        signal: controller.signal
       });
       
-      clearTimeout(to);
-      const dt = Date.now() - t0;
+      clearTimeout(timeout);
+      const responseTime = Date.now() - startTime;
       
-      if (!r.ok) {
-        const err = await r.text().catch(() => '');
-        if (r.status === 429 || err.includes('rate limit')) {
-          markModelRateLimited(m.id, parseRetryAfter(err));
-          updateModelStats(m.id, false, dt);
-          continue;
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.log(`   ❌ ${model.id} failed (${response.status})`);
+        
+        if (response.status === 429 || errorText.toLowerCase().includes('rate limit')) {
+          const retrySeconds = parseRetryAfter(errorText);
+          markModelRateLimited(model.id, retrySeconds);
         }
-        updateModelStats(m.id, false, dt);
+        
+        updateModelStats(model.id, false, responseTime);
         continue;
       }
       
-      const data = await r.json();
+      const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
+      
       if (!content) {
-        updateModelStats(m.id, false, dt);
+        console.log(`   ❌ ${model.id} returned empty content`);
+        updateModelStats(model.id, false, responseTime);
         continue;
       }
       
-      updateModelStats(m.id, true, dt);
-      return { content, modelId: m.id, responseTime: dt };
-    } catch (e) {
-      clearTimeout(to);
-      if (e.name !== 'AbortError') updateModelStats(m.id, false, Date.now() - t0);
+      console.log(`   ✓ ${model.id} succeeded (${responseTime}ms)`);
+      updateModelStats(model.id, true, responseTime);
+      
+      return {
+        content: content,
+        modelId: model.id,
+        responseTime: responseTime
+      };
+      
+    } catch (error) {
+      clearTimeout(timeout);
+      const responseTime = Date.now() - startTime;
+      
+      if (error.name === 'AbortError') {
+        console.log(`   ⏱️  ${model.id} timeout (${model.timeout}ms)`);
+      } else {
+        console.log(`   ❌ ${model.id} error: ${error.message}`);
+      }
+      
+      updateModelStats(model.id, false, responseTime);
       continue;
     }
   }
-  throw new Error('All models failed');
+  
+  throw new Error('All AI models failed or are rate limited');
 }
 
-async function callAIRacing(msgs, cat = 'chat', opts = {}) {
-  return callAISequential(msgs, cat, opts);
-}
-
-async function enhancePrompt(txt, isImg = false) {
+async function enhancePrompt(text, isImage = false) {
   try {
-    const sys = isImg ? 'Translate to English, add artistic details. Max 70 chars, no punctuation. Only return prompt.' : 'Enhance prompt to be clearer. Max 200 chars. Only return enhanced prompt.';
-    const r = await callAISequential([{ role: 'system', content: sys }, { role: 'user', content: `Enhance: "${txt}"` }], 'quick', { maxTokens: isImg ? 100 : 200 });
-    const e = r.content.trim() || txt;
-    const max = isImg ? 200 : 500;
-    return e.length > max ? e.substring(0, max - 3) + '...' : e;
-  } catch {
-    return txt;
+    const systemPrompt = isImage 
+      ? 'Translate to English and add artistic details. Maximum 70 characters, no punctuation. Only return the enhanced prompt.'
+      : 'Enhance this prompt to be clearer and more detailed. Maximum 200 characters. Only return the enhanced prompt.';
+    
+    const result = await callAISequential([
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: `Enhance: "${text}"` }
+    ], 'quick', { maxTokens: isImage ? 100 : 200 });
+    
+    const enhanced = result.content.trim() || text;
+    const maxLength = isImage ? 200 : 500;
+    
+    return enhanced.length > maxLength 
+      ? enhanced.substring(0, maxLength - 3) + '...' 
+      : enhanced;
+      
+  } catch (error) {
+    console.log('Prompt enhancement failed, using original');
+    return text;
   }
 }
 
@@ -181,7 +244,7 @@ async function enhancePrompt(txt, isImg = false) {
 function detectQueryType(query) {
   const queryLower = query.toLowerCase();
   
-  // Detect product models (e.g., Dell 3501, iPhone 15, Galaxy S24)
+  // Product model patterns
   const productPatterns = [
     /\b(dell|hp|lenovo|asus|acer|msi)\s+[a-z]?\d{4,}/i,
     /\b(iphone|galaxy|pixel|oneplus|xiaomi|oppo|vivo)\s+\d+/i,
@@ -190,19 +253,19 @@ function detectQueryType(query) {
     /\b(core\s+i\d|ryzen\s+\d)/i
   ];
   
-  if (productPatterns.some(p => p.test(query))) {
+  if (productPatterns.some(pattern => pattern.test(query))) {
     return 'product_specific';
   }
   
-  // Detect brand queries
+  // Brand queries
   const brands = ['apple', 'samsung', 'dell', 'hp', 'lenovo', 'asus', 'xiaomi', 'oppo', 'vivo'];
-  if (brands.some(b => queryLower.includes(b))) {
+  if (brands.some(brand => queryLower.includes(brand))) {
     return 'brand_related';
   }
   
-  // Detect technical queries
+  // Technical queries
   const techKeywords = ['specs', 'specification', 'review', 'benchmark', 'performance', 'cấu hình', 'thông số', 'đánh giá'];
-  if (techKeywords.some(k => queryLower.includes(k))) {
+  if (techKeywords.some(keyword => queryLower.includes(keyword))) {
     return 'technical';
   }
   
@@ -213,37 +276,29 @@ function getFallbackSites(query, isVietnamese) {
   const queryLower = query.toLowerCase();
   const queryType = detectQueryType(query);
   
-  // Product-specific searches
-  if (queryType === 'product_specific') {
-    if (queryLower.includes('dell') || queryLower.includes('hp') || queryLower.includes('lenovo') || queryLower.includes('asus')) {
-      return isVietnamese
-        ? ['https://www.notebookcheck.net', 'https://www.dell.com', 'https://tinhte.vn', 'https://www.laptopmag.com', 'https://fptshop.com.vn', 'https://thegioididong.com', 'https://www.pcmag.com']
-        : ['https://www.notebookcheck.net', 'https://www.dell.com', 'https://www.laptopmag.com', 'https://www.pcmag.com', 'https://www.ultrabookreview.com', 'https://www.tomshardware.com', 'https://www.techradar.com'];
-    }
-    
-    if (queryLower.includes('iphone') || queryLower.includes('apple')) {
-      return isVietnamese 
-        ? ['https://www.apple.com', 'https://www.gsmarena.com', 'https://tinhte.vn', 'https://genk.vn', 'https://www.macrumors.com', 'https://thegioididong.com', 'https://fptshop.com.vn']
-        : ['https://www.apple.com', 'https://www.gsmarena.com', 'https://www.macrumors.com', 'https://www.theverge.com', 'https://www.cnet.com', 'https://9to5mac.com'];
-    }
-    
-    if (queryLower.includes('samsung') || queryLower.includes('galaxy')) {
-      return isVietnamese
-        ? ['https://www.samsung.com', 'https://www.gsmarena.com', 'https://tinhte.vn', 'https://genk.vn', 'https://www.androidauthority.com', 'https://thegioididong.com', 'https://fptshop.com.vn']
-        : ['https://www.samsung.com', 'https://www.gsmarena.com', 'https://www.androidauthority.com', 'https://www.theverge.com', 'https://www.cnet.com', 'https://www.androidcentral.com'];
-    }
-  }
-  
-  // Brand-related searches
-  if (queryLower.includes('laptop') || queryLower.includes('computer') || queryLower.includes('pc')) {
+  // Laptop queries
+  if (queryLower.includes('laptop') || queryLower.includes('dell') || queryLower.includes('hp') || 
+      queryLower.includes('lenovo') || queryLower.includes('asus')) {
     return isVietnamese
-      ? ['https://www.notebookcheck.net', 'https://tinhte.vn', 'https://www.laptopmag.com', 'https://genk.vn', 'https://fptshop.com.vn', 'https://www.pcmag.com', 'https://thegioididong.com']
-      : ['https://www.notebookcheck.net', 'https://www.laptopmag.com', 'https://www.pcmag.com', 'https://www.theverge.com', 'https://www.tomshardware.com', 'https://www.techradar.com'];
+      ? ['https://www.notebookcheck.net', 'https://tinhte.vn', 'https://www.laptopmag.com', 
+         'https://fptshop.com.vn', 'https://www.pcmag.com', 'https://thegioididong.com', 'https://genk.vn']
+      : ['https://www.notebookcheck.net', 'https://www.laptopmag.com', 'https://www.pcmag.com', 
+         'https://www.theverge.com', 'https://www.tomshardware.com', 'https://www.techradar.com', 'https://www.ultrabookreview.com'];
   }
   
+  // Phone queries
+  if (queryLower.includes('iphone') || queryLower.includes('apple') || queryLower.includes('samsung') || queryLower.includes('galaxy')) {
+    return isVietnamese 
+      ? ['https://www.gsmarena.com', 'https://www.apple.com', 'https://www.samsung.com', 
+         'https://tinhte.vn', 'https://thegioididong.com', 'https://fptshop.com.vn', 'https://genk.vn']
+      : ['https://www.gsmarena.com', 'https://www.apple.com', 'https://www.samsung.com', 
+         'https://www.theverge.com', 'https://www.cnet.com', 'https://www.androidauthority.com', 'https://9to5mac.com'];
+  }
+  
+  // General tech
   return isVietnamese
-    ? ['https://vi.wikipedia.org', 'https://vnexpress.net', 'https://tinhte.vn', 'https://genk.vn', 'https://en.wikipedia.org']
-    : ['https://en.wikipedia.org', 'https://www.bbc.com', 'https://www.theverge.com', 'https://www.cnet.com', 'https://www.reuters.com'];
+    ? ['https://vi.wikipedia.org', 'https://tinhte.vn', 'https://genk.vn', 'https://vnexpress.net', 'https://en.wikipedia.org']
+    : ['https://en.wikipedia.org', 'https://www.theverge.com', 'https://www.cnet.com', 'https://www.techradar.com', 'https://www.bbc.com'];
 }
 
 async function suggestWebsites(query) {
@@ -251,7 +306,6 @@ async function suggestWebsites(query) {
     const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
     const queryType = detectQueryType(query);
     
-    // Extract product model if present
     let productModel = '';
     const modelMatch = query.match(/\b([a-z]+)\s+([a-z]?\d{4,})/i);
     if (modelMatch) {
@@ -259,69 +313,48 @@ async function suggestWebsites(query) {
     }
     
     const systemPrompt = isVietnamese 
-      ? `Bạn là chuyên gia tìm kiếm sản phẩm công nghệ. Đề xuất 7 trang web TỐT NHẤT để tìm thông tin CHI TIẾT.
-
-Query: "${query}"
-${productModel ? `Sản phẩm cụ thể: ${productModel}` : ''}
-Loại query: ${queryType}
+      ? `Bạn là chuyên gia tìm kiếm. Đề xuất 7 trang web TỐT NHẤT để tìm thông tin về: "${query}"
+${productModel ? `Sản phẩm: ${productModel}` : ''}
+Loại: ${queryType}
 
 YÊU CẦU:
-1. Ưu tiên trang CHÍNH THỨC của hãng (Dell.com, Apple.com, Samsung.com)
-2. Trang review chuyên sâu (NotebookCheck, GSMarena, LaptopMag, PCMag)
-3. Trang tin công nghệ uy tín (TinhTe, Genk, TheVerge, CNET)
-4. Trang bán hàng có review chi tiết (FPTShop, TGDĐ - chỉ với query tiếng Việt)
-5. Wikipedia (Wikipedia của sản phẩm hoặc hãng)
+1. Ưu tiên trang CHÍNH THỨC
+2. Trang review uy tín
+3. Wikipedia
+4. Trang tin công nghệ
 
-CHỈ trả về mảng JSON, không giải thích gì thêm.
-Ví dụ: ["https://www.dell.com", "https://www.notebookcheck.net", "https://tinhte.vn"]
-
-QUAN TRỌNG: 
-- Với laptop Dell 3501, bao gồm: dell.com, notebookcheck.net, laptopmag.com, pcmag.com, tinhte.vn
-- Với điện thoại, bao gồm: trang chính thức, gsmarena.com, tinhte.vn
-- Đảm bảo link liên quan TRỰC TIẾP đến sản phẩm`
-      : `You are a tech product search expert. Suggest 7 BEST websites for DETAILED information.
-
-Query: "${query}"
-${productModel ? `Specific product: ${productModel}` : ''}
-Query type: ${queryType}
+Trả về JSON array: ["url1", "url2", ...]`
+      : `You are a search expert. Suggest 7 BEST websites for: "${query}"
+${productModel ? `Product: ${productModel}` : ''}
+Type: ${queryType}
 
 REQUIREMENTS:
-1. Prioritize OFFICIAL brand sites (Dell.com, Apple.com, Samsung.com)
-2. In-depth review sites (NotebookCheck, GSMarena, LaptopMag, PCMag)
-3. Trusted tech news (TheVerge, CNET, TechRadar)
-4. Shopping sites with detailed reviews
-5. Wikipedia (product or brand Wikipedia)
+1. Prioritize OFFICIAL sites
+2. Reputable review sites
+3. Wikipedia
+4. Tech news sites
 
-Return ONLY a JSON array, no explanation.
-Example: ["https://www.dell.com", "https://www.notebookcheck.net", "https://www.laptopmag.com"]
+Return JSON array: ["url1", "url2", ...]`;
 
-IMPORTANT: 
-- For Dell 3501 laptop: include dell.com, notebookcheck.net, laptopmag.com, pcmag.com
-- For phones: include official site, gsmarena.com, tech news sites
-- Ensure DIRECTLY RELEVANT links to the product`;
-
-    const userPrompt = isVietnamese 
-      ? `Tìm 7 trang web TỐT NHẤT cho: "${query}". ${productModel ? `Sản phẩm: ${productModel}` : ''}`
-      : `Find 7 BEST websites for: "${query}". ${productModel ? `Product: ${productModel}` : ''}`;
-
-    let r;
+    let result;
     try {
-      r = await callAISequential([
+      result = await callAISequential([
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'user', content: `Find websites for: "${query}"` }
       ], 'research', { temperature: 0.1, maxTokens: 400 });
-    } catch (researchError) {
-      console.log('   Research model failed, trying quick models...');
-      r = await callAISequential([
+    } catch {
+      console.log('   Research model failed, using quick models');
+      result = await callAISequential([
         { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt }
+        { role: 'user', content: `Find websites for: "${query}"` }
       ], 'quick', { temperature: 0.1, maxTokens: 400 });
     }
     
-    const content = r.content.trim();
+    const content = result.content.trim();
     const jsonMatch = content.match(/\[[\s\S]*?\]/);
+    
     if (!jsonMatch) {
-      console.log('   No JSON array found in response, using fallback sites');
+      console.log('   No JSON found, using fallback sites');
       return getFallbackSites(query, isVietnamese);
     }
     
@@ -331,11 +364,10 @@ IMPORTANT:
       .slice(0, 7);
     
     if (validSites.length === 0) {
-      console.log('   No valid sites found, using fallback');
       return getFallbackSites(query, isVietnamese);
     }
     
-    // Add fallback sites if not enough
+    // Add fallback if needed
     if (validSites.length < 5) {
       const fallback = getFallbackSites(query, isVietnamese);
       fallback.forEach(site => {
@@ -346,17 +378,16 @@ IMPORTANT:
     }
     
     return validSites;
-  } catch (e) {
-    console.error('   Error suggesting websites:', e.message);
+    
+  } catch (error) {
+    console.error('   Error suggesting websites:', error.message);
     return getFallbackSites(query, /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query));
   }
 }
 
 async function searchSpecificSites(query, sites) {
   const results = [];
-  const queryType = detectQueryType(query);
   
-  // Extract product model for better searching
   let productModel = '';
   const modelMatch = query.match(/\b([a-z]+)\s+([a-z]?\d{4,})/i);
   if (modelMatch) {
@@ -366,31 +397,25 @@ async function searchSpecificSites(query, sites) {
   for (const site of sites) {
     try {
       const domain = new URL(site).hostname.replace('www.', '');
-      
-      // Enhanced search query based on query type
-      let searchQuery;
-      if (productModel) {
-        // For specific products, use exact model + related keywords
-        searchQuery = `${productModel} specifications review`;
-      } else {
-        searchQuery = query;
-      }
+      const searchQuery = productModel 
+        ? `${productModel} specifications review`
+        : query;
       
       const siteSearch = `${searchQuery} site:${domain}`;
-      const eq = encodeURIComponent(siteSearch);
+      const encodedQuery = encodeURIComponent(siteSearch);
       
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 8000);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
       
-      const r = await fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, {
-        signal: ctrl.signal,
+      const response = await fetch(`https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1`, {
+        signal: controller.signal,
         headers: { 'User-Agent': 'Mozilla/5.0' }
       });
       
       clearTimeout(timeout);
       
-      if (r.ok) {
-        const data = await r.json();
+      if (response.ok) {
+        const data = await response.json();
         
         if (data.Abstract) {
           results.push({
@@ -403,14 +428,14 @@ async function searchSpecificSites(query, sites) {
         }
         
         if (data.RelatedTopics) {
-          data.RelatedTopics.slice(0, 5).forEach(t => {
-            if (t.Text && t.FirstURL) {
-              const topicDomain = new URL(t.FirstURL).hostname.replace('www.', '');
-              if (topicDomain === domain || t.FirstURL.includes(domain)) {
+          data.RelatedTopics.slice(0, 5).forEach(topic => {
+            if (topic.Text && topic.FirstURL) {
+              const topicDomain = new URL(topic.FirstURL).hostname.replace('www.', '');
+              if (topicDomain === domain || topic.FirstURL.includes(domain)) {
                 results.push({
-                  title: t.Text.split(' - ')[0],
-                  snippet: t.Text,
-                  link: t.FirstURL,
+                  title: topic.Text.split(' - ')[0],
+                  snippet: topic.Text,
+                  link: topic.FirstURL,
                   source: domain,
                   priority: 8
                 });
@@ -419,14 +444,9 @@ async function searchSpecificSites(query, sites) {
           });
         }
       }
-    } catch (e) {
-      console.error(`Error searching ${site}:`, e.message);
+    } catch (error) {
+      console.error(`Error searching ${site}:`, error.message);
     }
-  }
-  
-  // If no results from search, try direct crawling of suggested sites
-  if (results.length === 0) {
-    console.log('   No search results, will rely on direct crawling');
   }
   
   return results;
@@ -434,55 +454,38 @@ async function searchSpecificSites(query, sites) {
 
 async function crawlWebpage(url) {
   try {
-    const ctrl = new AbortController();
-    const timeout = setTimeout(() => ctrl.abort(), 15000); // Increased timeout
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
     
-    const r = await fetch(url, {
-      signal: ctrl.signal,
+    const response = await fetch(url, {
+      signal: controller.signal,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-        'Accept-Encoding': 'gzip, deflate',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
+        'Accept': 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-US,en;q=0.5'
       }
     });
     
     clearTimeout(timeout);
     
-    if (!r.ok) return null;
+    if (!response.ok) return null;
     
-    const html = await r.text();
+    const html = await response.text();
     const $ = cheerio.load(html);
     
-    $('script, style, nav, header, footer, iframe, noscript, ads, .advertisement').remove();
+    // Remove unwanted elements
+    $('script, style, nav, header, footer, iframe, noscript').remove();
     
     const title = $('title').text().trim() || $('h1').first().text().trim();
     
-    let content = '';
-    
-    // Enhanced content selectors for tech sites
+    // Extract main content
     const contentSelectors = [
-      'article',
-      '[role="main"]',
-      'main',
-      '.content',
-      '.article-content',
-      '.post-content',
-      '#content',
-      '.entry-content',
-      '.product-description',
-      '.specs-table',
-      '.specifications',
-      '.review-content',
-      '.product-details',
-      '[itemprop="description"]',
-      '.description',
-      '.tech-specs',
-      '.product-info'
+      'article', '[role="main"]', 'main', '.content', '.article-content',
+      '.post-content', '#content', '.entry-content', '.product-description',
+      '.specs-table', '.specifications', '.review-content'
     ];
     
+    let content = '';
     for (const selector of contentSelectors) {
       const elem = $(selector);
       if (elem.length > 0) {
@@ -495,11 +498,9 @@ async function crawlWebpage(url) {
       content = $('body').text();
     }
     
-    // Extract structured data (specifications, reviews, etc.)
+    // Extract specifications
     const specs = {};
-    
-    // Try to find specification tables
-    $('table.specs, table.specifications, .spec-table, .product-specs, .tech-specs').each((i, table) => {
+    $('table.specs, table.specifications, .spec-table').each((i, table) => {
       $(table).find('tr').each((j, row) => {
         const cells = $(row).find('td, th');
         if (cells.length >= 2) {
@@ -512,7 +513,6 @@ async function crawlWebpage(url) {
       });
     });
     
-    // Add specs to content if found
     if (Object.keys(specs).length > 0) {
       content += '\n\n=== SPECIFICATIONS ===\n';
       for (const [key, value] of Object.entries(specs)) {
@@ -524,11 +524,12 @@ async function crawlWebpage(url) {
       .replace(/\s+/g, ' ')
       .replace(/\n+/g, '\n')
       .trim()
-      .substring(0, 5000); // Increased content length
+      .substring(0, 5000);
     
     return { title, content, url, specs };
-  } catch (e) {
-    console.error(`Error crawling ${url}:`, e.message);
+    
+  } catch (error) {
+    console.error(`Error crawling ${url}:`, error.message);
     return null;
   }
 }
@@ -536,15 +537,14 @@ async function crawlWebpage(url) {
 async function smartSearch(query) {
   console.log(`\n🔍 Smart Search: "${query}"`);
   const queryType = detectQueryType(query);
-  console.log(`   Query type detected: ${queryType}`);
+  console.log(`   Query type: ${queryType}`);
   
   try {
     console.log('📍 Step 1: Suggesting websites...');
     const suggestedSites = await suggestWebsites(query);
-    console.log(`   Found ${suggestedSites.length} suggested sites:`, suggestedSites);
+    console.log(`   Found ${suggestedSites.length} sites`);
     
     if (suggestedSites.length === 0) {
-      console.log('   No suggested sites, using fallback search');
       return await searchWebFallback(query);
     }
     
@@ -555,22 +555,19 @@ async function smartSearch(query) {
     console.log('📥 Step 3: Crawling webpages...');
     let topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 5);
     
-    // Nếu không có search results, crawl trực tiếp suggested sites
     if (topUrls.length === 0) {
-      console.log('   No search results, crawling suggested sites directly...');
+      console.log('   No search results, crawling suggested sites');
       topUrls = suggestedSites.slice(0, 5);
     }
     
     if (topUrls.length === 0) {
-      console.log('   No URLs to crawl, using fallback search');
       return await searchWebFallback(query);
     }
     
     const crawlPromises = topUrls.map(url => crawlWebpage(url));
     const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
-    console.log(`   Crawled ${crawledData.length}/${topUrls.length} pages successfully`);
+    console.log(`   Crawled ${crawledData.length}/${topUrls.length} pages`);
     
-    // Nếu crawl được ít nhất 1 trang, hoặc có search results, coi như thành công
     if (crawledData.length > 0 || searchResults.length > 0) {
       return {
         query,
@@ -582,52 +579,80 @@ async function smartSearch(query) {
       };
     }
     
-    // Nếu không có gì cả, fallback
-    console.log('   No data found, using fallback search');
     return await searchWebFallback(query);
-  } catch (e) {
-    console.error('   Smart search error:', e.message);
-    console.log('   Falling back to standard search');
+    
+  } catch (error) {
+    console.error('   Smart search error:', error.message);
     return await searchWebFallback(query);
   }
 }
 
 async function searchWebFallback(query) {
-  const ctrl = new AbortController();
-  const timeout = setTimeout(() => ctrl.abort(), 20000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
   
   try {
-    const eq = encodeURIComponent(query);
+    const encodedQuery = encodeURIComponent(query);
     
     const searches = [
-      fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, {
-        signal: ctrl.signal,
+      fetch(`https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1`, {
+        signal: controller.signal,
         headers: { 'User-Agent': 'Mozilla/5.0' }
       })
         .then(r => r.json())
-        .then(d => {
-          const res = [];
-          if (d.Abstract) res.push({ title: d.Heading || 'Answer', snippet: d.Abstract, link: d.AbstractURL || '', source: 'DuckDuckGo', priority: 10 });
-          if (d.RelatedTopics) {
-            d.RelatedTopics.slice(0, 5).forEach(t => {
-              if (t.Text && t.FirstURL) {
-                const dom = new URL(t.FirstURL).hostname;
-                res.push({ title: t.Text.split(' - ')[0], snippet: t.Text, link: t.FirstURL, source: dom, priority: 5 });
+        .then(data => {
+          const results = [];
+          if (data.Abstract) {
+            results.push({
+              title: data.Heading || 'Answer',
+              snippet: data.Abstract,
+              link: data.AbstractURL || '',
+              source: 'DuckDuckGo',
+              priority: 10
+            });
+          }
+          if (data.RelatedTopics) {
+            data.RelatedTopics.slice(0, 5).forEach(topic => {
+              if (topic.Text && topic.FirstURL) {
+                const domain = new URL(topic.FirstURL).hostname;
+                results.push({
+                  title: topic.Text.split(' - ')[0],
+                  snippet: topic.Text,
+                  link: topic.FirstURL,
+                  source: domain,
+                  priority: 5
+                });
               }
             });
           }
-          return res;
+          return results;
         })
         .catch(() => []),
       
-      fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${eq}&format=json&srlimit=3&origin=*`, { signal: ctrl.signal })
+      fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodedQuery}&format=json&srlimit=3&origin=*`, {
+        signal: controller.signal
+      })
         .then(r => r.json())
-        .then(d => (d.query?.search || []).map(i => ({ title: i.title, snippet: i.snippet.replace(/<[^>]*>/g, ''), link: `https://en.wikipedia.org/wiki/${encodeURIComponent(i.title.replace(/ /g, '_'))}`, source: 'wikipedia.org', priority: 9 })))
+        .then(data => (data.query?.search || []).map(item => ({
+          title: item.title,
+          snippet: item.snippet.replace(/<[^>]*>/g, ''),
+          link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+          source: 'wikipedia.org',
+          priority: 9
+        })))
         .catch(() => [])
     ];
 
-    const settled = await Promise.allSettled(searches.map(p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])));
-    const res = settled.filter(r => r.status === 'fulfilled' && Array.isArray(r.value)).flatMap(r => r.value);
+    const settled = await Promise.allSettled(
+      searches.map(p => Promise.race([
+        p,
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 8000))
+      ]))
+    );
+    
+    const results = settled
+      .filter(r => r.status === 'fulfilled' && Array.isArray(r.value))
+      .flatMap(r => r.value);
     
     clearTimeout(timeout);
     
@@ -635,13 +660,21 @@ async function searchWebFallback(query) {
       query,
       queryType: 'general',
       suggestedSites: [],
-      searchResults: res,
+      searchResults: results,
       crawledData: [],
-      totalSources: res.length
+      totalSources: results.length
     };
+    
   } catch {
     clearTimeout(timeout);
-    return { query, queryType: 'general', suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
+    return {
+      query,
+      queryType: 'general',
+      suggestedSites: [],
+      searchResults: [],
+      crawledData: [],
+      totalSources: 0
+    };
   }
 }
 
@@ -654,7 +687,6 @@ async function summarizeSearchResults(query, searchData) {
     let context = '';
     let sourceCount = 0;
     
-    // Thêm nội dung đã crawl (ưu tiên cao nhất)
     if (searchData.crawledData && searchData.crawledData.length > 0) {
       context += '=== CRAWLED CONTENT ===\n\n';
       searchData.crawledData.forEach((data, i) => {
@@ -663,67 +695,60 @@ async function summarizeSearchResults(query, searchData) {
       });
     }
     
-    // Thêm kết quả search nếu có
     if (searchData.searchResults && searchData.searchResults.length > 0) {
       context += '\n=== SEARCH RESULTS ===\n\n';
-      searchData.searchResults.slice(0, 5).forEach((r, i) => {
-        context += `[${sourceCount + i + 1}] ${r.title}\n${r.snippet.substring(0, 300)}\nSource: ${r.source}\n\n`;
+      searchData.searchResults.slice(0, 5).forEach((result, i) => {
+        context += `[${sourceCount + i + 1}] ${result.title}\n${result.snippet.substring(0, 300)}\nSource: ${result.source}\n\n`;
       });
     }
     
-    // Giới hạn context length
     context = context.substring(0, 6000);
     
-    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
+    const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
     const queryType = searchData.queryType || 'general';
     
-    let systemPrompt = `You are a research assistant. Synthesize the information to answer the query.
-Language: ${isVN ? 'Vietnamese' : 'English'}
+    let systemPrompt = `You are a research assistant. Synthesize information to answer queries.
+Language: ${isVietnamese ? 'Vietnamese' : 'English'}
 Query type: ${queryType}
 
 Format:
 1. Direct answer (2-3 sentences)
-2. Key points (bullet points with details)
-3. Cite sources using [1], [2], etc.
+2. Key points (bullet points)
+3. Cite sources using [1], [2]
 
-Be comprehensive but concise. Max 600 words.
-If information is limited or unclear, acknowledge it honestly.`;
+Be comprehensive but concise. Max 600 words.`;
 
-    // Enhanced prompt for product-specific queries
     if (queryType === 'product_specific') {
-      systemPrompt += `\n\nFOR PRODUCT QUERIES:
-- Focus on specifications, features, pricing, and availability
-- Include technical details (processor, RAM, storage, display, battery, etc.)
-- Mention pros and cons if available
-- Compare with alternatives if mentioned`;
+      systemPrompt += `\n\nFOR PRODUCTS: Focus on specs, features, pricing, pros/cons`;
     }
     
-    const r = await callAISequential([
+    const result = await callAISequential([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `Query: "${query}"\n\nInformation:\n${context}` }
     ], 'chat', { temperature: 0.3, maxTokens: 800 });
     
-    let summary = r.content.trim().replace(/\*\*/g, '');
+    let summary = result.content.trim().replace(/\*\*/g, '');
     
-    // Thêm nguồn tham khảo
+    // Add sources
     const sources = [];
     if (searchData.crawledData) {
-      searchData.crawledData.forEach((d, i) => {
+      searchData.crawledData.forEach((data, i) => {
         try {
-          const domain = new URL(d.url).hostname.replace('www.', '');
-          sources.push(`[${i + 1}] [${domain}](${d.url})`);
-        } catch (e) {
-          sources.push(`[${i + 1}] ${d.url}`);
+          const domain = new URL(data.url).hostname.replace('www.', '');
+          sources.push(`[${i + 1}] [${domain}](${data.url})`);
+        } catch {
+          sources.push(`[${i + 1}] ${data.url}`);
         }
       });
     }
+    
     if (searchData.searchResults && sources.length < 5) {
-      searchData.searchResults.slice(0, 5 - sources.length).forEach((r, i) => {
-        if (r.link) {
+      searchData.searchResults.slice(0, 5 - sources.length).forEach((result, i) => {
+        if (result.link) {
           try {
-            sources.push(`[${sources.length + 1}] [${r.source}](${r.link})`);
-          } catch (e) {
-            sources.push(`[${sources.length + 1}] ${r.source}`);
+            sources.push(`[${sources.length + 1}] [${result.source}](${result.link})`);
+          } catch {
+            sources.push(`[${sources.length + 1}] ${result.source}`);
           }
         }
       });
@@ -734,13 +759,14 @@ If information is limited or unclear, acknowledge it honestly.`;
     }
     
     return summary;
-  } catch (e) {
-    console.error('Error summarizing:', e);
+    
+  } catch (error) {
+    console.error('Error summarizing:', error);
     return 'Đã tìm thấy thông tin nhưng không thể tổng hợp. Vui lòng thử lại.';
   }
 }
 
-async function shouldSearchWeb(msg) {
+async function shouldSearchWeb(message) {
   try {
     const searchKeywords = [
       'tìm kiếm', 'tra cứu', 'là gì', 'là ai', 'tìm hiểu', 'thông số', 'giá', 'cấu hình',
@@ -751,83 +777,185 @@ async function shouldSearchWeb(msg) {
       'current', 'news', 'where', 'when', 'how', 'compare', 'features'
     ];
     
-    const msgLower = msg.toLowerCase();
+    const messageLower = message.toLowerCase();
     
-    if (searchKeywords.some(kw => msgLower.includes(kw))) {
+    if (searchKeywords.some(keyword => messageLower.includes(keyword))) {
       return true;
     }
     
-    if (msgLower.includes('?') && (
-      msgLower.includes('năm') || msgLower.includes('year') ||
-      msgLower.includes('hôm nay') || msgLower.includes('today') ||
-      msgLower.includes('hiện nay') || msgLower.includes('currently')
+    if (messageLower.includes('?') && (
+      messageLower.includes('năm') || messageLower.includes('year') ||
+      messageLower.includes('hôm nay') || messageLower.includes('today') ||
+      messageLower.includes('hiện nay') || messageLower.includes('currently')
     )) {
       return true;
     }
     
-    const r = await callAISequential([
+    const result = await callAISequential([
       { role: 'system', content: 'Analyze if query needs web search. Reply ONLY "YES" or "NO". YES for: current events, news, real-time data, product info, prices, specs. NO for: general knowledge, coding, creative writing.' },
-      { role: 'user', content: `Search needed: "${msg}"` }
+      { role: 'user', content: `Search needed: "${message}"` }
     ], 'quick', { temperature: 0.1, maxTokens: 10 });
     
-    return r.content.trim().toUpperCase() === 'YES';
+    return result.content.trim().toUpperCase() === 'YES';
+    
   } catch {
     const basicKeywords = ['tìm kiếm', 'search', 'là gì', 'what is'];
-    return basicKeywords.some(kw => msg.toLowerCase().includes(kw));
+    return basicKeywords.some(keyword => message.toLowerCase().includes(keyword));
   }
 }
 
 async function verifyImage(url) {
-  await new Promise(r => setTimeout(r, 2000));
-  for (let i = 1; i <= 3; i++) {
+  await new Promise(resolve => setTimeout(resolve, 2000));
+  
+  for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 2000);
-      const r = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
-      clearTimeout(to);
-      if (r.ok && r.headers.get('content-type')?.startsWith('image/')) return { success: true, attempts: i };
-    } catch { }
-    if (i < 3) await new Promise(r => setTimeout(r, 800));
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 2000);
+      
+      const response = await fetch(url, {
+        method: 'HEAD',
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeout);
+      
+      if (response.ok && response.headers.get('content-type')?.startsWith('image/')) {
+        return { success: true, attempts: attempt };
+      }
+    } catch (error) {
+      // Continue to next attempt
+    }
+    
+    if (attempt < 3) {
+      await new Promise(resolve => setTimeout(resolve, 800));
+    }
   }
+  
   return { success: false, attempts: 3 };
 }
 
-app.use(helmet({ contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], scriptSrc: ["'self'"], imgSrc: ["'self'", "data:", "https:", "http:"], connectSrc: ["'self'", "https:", "http:"] } } }));
+// ========== MIDDLEWARE ==========
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      scriptSrc: ["'self'"],
+      imgSrc: ["'self'", "data:", "https:", "http:"],
+      connectSrc: ["'self'", "https:", "http:"]
+    }
+  }
+}));
+
 app.set('trust proxy', 1);
 
-const generalLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100, message: { error: 'Too many requests' } });
-const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { error: 'Too many auth attempts' }, skipSuccessfulRequests: true });
-const imageLimiter = rateLimit({ windowMs: 60 * 1000, max: 15, message: { error: 'Too many image requests' } });
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests' }
+});
 
-const allowedOrigins = ['https://hein1.onrender.com', 'https://test-d9o3.onrender.com', ...(process.env.NODE_ENV === 'development' ? ['http://localhost:3000', 'http://localhost:5173'] : [])];
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: { error: 'Too many authentication attempts' },
+  skipSuccessfulRequests: true
+});
 
-app.use(cors({ origin: (o, cb) => (!o || allowedOrigins.includes(o)) ? cb(null, true) : cb(new Error('CORS')), credentials: true }));
+const imageLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 15,
+  message: { error: 'Too many image requests' }
+});
+
+const allowedOrigins = [
+  'https://hein1.onrender.com',
+  'https://test-d9o3.onrender.com',
+  ...(process.env.NODE_ENV === 'development' ? ['http://localhost:3000', 'http://localhost:5173'] : [])
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
+  credentials: true
+}));
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'test', 'frontend', 'dist'), { maxAge: '1d' }));
 app.use(generalLimiter);
 
-function sanitizeInput(i) {
-  if (typeof i !== 'string') return i;
-  return xss(i.trim(), { whiteList: { a: ['href'], img: ['src', 'alt'], b: [], strong: [], i: [], em: [], code: [], pre: [], ul: [], ol: [], li: [], p: [], br: [] }, stripIgnoreTag: true });
+function sanitizeInput(input) {
+  if (typeof input !== 'string') return input;
+  
+  return xss(input.trim(), {
+    whiteList: {
+      a: ['href'],
+      img: ['src', 'alt'],
+      b: [],
+      strong: [],
+      i: [],
+      em: [],
+      code: [],
+      pre: [],
+      ul: [],
+      ol: [],
+      li: [],
+      p: [],
+      br: []
+    },
+    stripIgnoreTag: true
+  });
 }
 
 function authenticateToken(req, res, next) {
-  const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token' });
+  const authHeader = req.headers['authorization'];
+  const token = authHeader?.split(' ')[1];
+  
+  if (!token) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+  
   jwt.verify(token, jwtSecret, (err, user) => {
-    if (err) return res.status(403).json({ error: 'Invalid token' });
+    if (err) {
+      return res.status(403).json({ error: 'Invalid token' });
+    }
     req.user = user;
     next();
   });
 }
 
-app.get('/', (req, res) => res.json({ status: 'OK', version: '4.2', features: ['DeepSeek Priority', 'Enhanced Smart Web Crawling', 'Product-Specific Search', 'Multi-page Analysis', 'DeepResearch Integration', 'Query Type Detection'] }));
+// ========== ROUTES ==========
+
+app.get('/', (req, res) => {
+  res.json({
+    status: 'OK',
+    version: '4.2',
+    features: [
+      'DeepSeek Priority',
+      'Enhanced Smart Web Crawling',
+      'Product-Specific Search',
+      'Multi-page Analysis',
+      'DeepResearch Integration',
+      'Query Type Detection'
+    ]
+  });
+});
 
 app.get('/health', async (req, res) => {
   try {
     const { error } = await supabase.from('users').select('id').limit(1);
     if (error) throw error;
-    res.json({ status: 'OK', uptime: process.uptime() });
+    
+    res.json({
+      status: 'OK',
+      uptime: process.uptime()
+    });
   } catch {
     res.status(503).json({ status: 'ERROR' });
   }
@@ -835,27 +963,75 @@ app.get('/health', async (req, res) => {
 
 app.get('/api/model-stats', (req, res) => {
   const stats = {};
-  for (const [id, d] of modelStats.entries()) {
-    const tot = d.successCount + d.failCount;
-    stats[id] = { successRate: tot > 0 ? ((d.successCount / tot) * 100).toFixed(1) + '%' : 'N/A', avgTime: d.avgResponseTime > 0 ? d.avgResponseTime.toFixed(0) + 'ms' : 'N/A', totalCalls: tot };
+  
+  for (const [modelId, data] of modelStats.entries()) {
+    const total = data.successCount + data.failCount;
+    stats[modelId] = {
+      successRate: total > 0 ? ((data.successCount / total) * 100).toFixed(1) + '%' : 'N/A',
+      avgTime: data.avgResponseTime > 0 ? data.avgResponseTime.toFixed(0) + 'ms' : 'N/A',
+      totalCalls: total
+    };
   }
+  
   res.json({ stats });
 });
 
 app.post('/api/register', authLimiter, async (req, res) => {
   try {
     const { email, password, name } = req.body;
-    if (!email || !password || !name) return res.status(400).json({ error: 'Missing fields' });
-    const e = sanitizeInput(email).toLowerCase();
-    const n = sanitizeInput(name);
-    if (password.length < 6) return res.status(400).json({ error: 'Password too short' });
-    const { data: ex } = await supabase.from('users').select('id').eq('email', e).maybeSingle();
-    if (ex) return res.status(400).json({ error: 'Email exists' });
-    const h = await bcrypt.hash(password, 10);
-    const { data: u, error } = await supabase.from('users').insert([{ email: e, password: h, name: n }]).select().single();
-    if (error) return res.status(500).json({ error: 'Registration failed' });
-    const token = jwt.sign({ id: u.id, email: u.email }, jwtSecret, { expiresIn: '7d' });
-    res.status(201).json({ token, user: { id: u.id, email: u.email, name: u.name } });
+    
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    const sanitizedEmail = sanitizeInput(email).toLowerCase();
+    const sanitizedName = sanitizeInput(name);
+    
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    }
+    
+    const { data: existing } = await supabase
+      .from('users')
+      .select('id')
+      .eq('email', sanitizedEmail)
+      .maybeSingle();
+    
+    if (existing) {
+      return res.status(400).json({ error: 'Email already exists' });
+    }
+    
+    const hashedPassword = await bcrypt.hash(password, 10);
+    
+    const { data: user, error } = await supabase
+      .from('users')
+      .insert([{
+        email: sanitizedEmail,
+        password: hashedPassword,
+        name: sanitizedName
+      }])
+      .select()
+      .single();
+    
+    if (error) {
+      return res.status(500).json({ error: 'Registration failed' });
+    }
+    
+    const token = jwt.sign(
+      { id: user.id, email: user.email },
+      jwtSecret,
+      { expiresIn: '7d' }
+    );
+    
+    res.status(201).json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name
+      }
+    });
+    
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
@@ -864,14 +1040,44 @@ app.post('/api/register', authLimiter, async (req, res) => {
 app.post('/api/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'Missing credentials' });
-    const e = sanitizeInput(email).toLowerCase();
-    const { data: u, error } = await supabase.from('users').select('*').eq('email', e).maybeSingle();
-    if (error || !u) return res.status(401).json({ error: 'Invalid credentials' });
-    const ok = await bcrypt.compare(password, u.password);
-    if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: u.id, email: u.email }, jwtSecret, { expiresIn: '7d' });
-    res.json({ token, user: { id: u.id, email: u.email, name: u.name } });
+    
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Missing credentials' });
+    }
+    
+    const sanitizedEmail = sanitizeInput(email).toLowerCase();
+    
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('email', sanitizedEmail)
+      .maybeSingle();
+    
+    if (error || !user) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const isValidPassword = await bcrypt.compare(password, user.password);
+    
+    if (!isValidPassword) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+    
+    const token = jwt.sign(
+      { id: user.id, email: user.email },
+      jwtSecret,
+      { expiresIn: '7d' }
+    );
+    
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        email: user.email,
+        name: user.name
+      }
+    });
+    
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
@@ -880,79 +1086,170 @@ app.post('/api/login', authLimiter, async (req, res) => {
 app.post('/api/chat', authenticateToken, async (req, res) => {
   try {
     const { messages, chatId, prompt } = req.body;
-    if (!messages || !Array.isArray(messages)) return res.status(400).json({ error: 'Invalid messages' });
     
-    const uid = req.user.id;
-    let cid = chatId;
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Invalid messages format' });
+    }
+    
+    const userId = req.user.id;
+    let currentChatId = chatId;
 
-    if (!cid) {
-      const fm = sanitizeInput(prompt || messages[0]?.content || 'New chat');
-      const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: fm.substring(0, 50) }]).select().single();
-      if (error) return res.status(500).json({ error: 'Failed to create chat' });
-      cid = c.id;
+    // Create new chat if needed
+    if (!currentChatId) {
+      const firstMessage = sanitizeInput(prompt || messages[0]?.content || 'New chat');
+      
+      const { data: chat, error } = await supabase
+        .from('chats')
+        .insert([{
+          user_id: userId,
+          title: firstMessage.substring(0, 50)
+        }])
+        .select()
+        .single();
+      
+      if (error) {
+        return res.status(500).json({ error: 'Failed to create chat' });
+      }
+      
+      currentChatId = chat.id;
     } else {
-      const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
-      if (!c) return res.status(404).json({ error: 'Chat not found' });
-      cid = c.id;
+      // Verify chat ownership
+      const { data: chat } = await supabase
+        .from('chats')
+        .select('id')
+        .eq('id', currentChatId)
+        .eq('user_id', userId)
+        .maybeSingle();
+      
+      if (!chat) {
+        return res.status(404).json({ error: 'Chat not found' });
+      }
+      
+      currentChatId = chat.id;
     }
 
-    const uc = prompt ? sanitizeInput(prompt) : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
-    if (!uc) return res.status(400).json({ error: 'No message' });
+    // Get user content
+    const userContent = prompt 
+      ? sanitizeInput(prompt) 
+      : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
+    
+    if (!userContent) {
+      return res.status(400).json({ error: 'No message content' });
+    }
 
-    await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: uc, timestamp: new Date().toISOString() }]);
+    // Save user message
+    await supabase.from('messages').insert([{
+      chat_id: currentChatId,
+      role: 'user',
+      content: userContent,
+      timestamp: new Date().toISOString()
+    }]);
 
-    const t0 = Date.now();
-    let msg = '', model = '', isSearch = false, srcs = [];
+    const startTime = Date.now();
+    let responseMessage = '';
+    let usedModel = '';
+    let isSearch = false;
+    let sources = [];
 
-    const kw = ['tìm kiếm:', 'search:', 'tra cứu:'];
-    const hasKw = kw.some(k => uc.toLowerCase().startsWith(k.toLowerCase()));
-    const doSearch = hasKw || await shouldSearchWeb(uc);
+    // Check if search is needed
+    const searchKeywords = ['tìm kiếm:', 'search:', 'tra cứu:'];
+    const hasSearchKeyword = searchKeywords.some(keyword => 
+      userContent.toLowerCase().startsWith(keyword.toLowerCase())
+    );
+    
+    const needsSearch = hasSearchKeyword || await shouldSearchWeb(userContent);
 
-    if (doSearch) {
+    if (needsSearch) {
       isSearch = true;
-      let q = uc;
-      if (hasKw) {
-        for (const k of kw) {
-          if (uc.toLowerCase().startsWith(k.toLowerCase())) {
-            q = uc.substring(k.length).trim();
+      let searchQuery = userContent;
+      
+      // Extract query after keyword
+      if (hasSearchKeyword) {
+        for (const keyword of searchKeywords) {
+          if (userContent.toLowerCase().startsWith(keyword.toLowerCase())) {
+            searchQuery = userContent.substring(keyword.length).trim();
             break;
           }
         }
       }
       
-      console.log(`\n🔍 Performing enhanced smart search for: "${q}"`);
-      const searchData = await smartSearch(q);
+      console.log(`\n🔍 Performing enhanced smart search for: "${searchQuery}"`);
+      const searchData = await smartSearch(searchQuery);
       
       if (searchData.totalSources > 0) {
-        srcs = searchData.suggestedSites.slice(0, 5);
-        msg = await summarizeSearchResults(q, searchData);
-        model = 'enhanced-smart-search';
+        sources = searchData.suggestedSites.slice(0, 5);
+        responseMessage = await summarizeSearchResults(searchQuery, searchData);
+        usedModel = 'enhanced-smart-search';
       } else {
-        msg = 'Không tìm thấy thông tin phù hợp. Vui lòng thử câu hỏi khác hoặc cụ thể hóa hơn (ví dụ: "Dell Inspiron 15 3501 cấu hình").';
+        responseMessage = 'Không tìm thấy thông tin phù hợp. Vui lòng thử câu hỏi khác hoặc cụ thể hóa hơn.';
       }
     } else {
-      const mm = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: sanitizeInput(m.content) }));
-      const sys = { role: 'system', content: 'You are Hein, an AI assistant by Hien2309. Answer in user\'s language. Be accurate, concise, and helpful.' };
+      // Regular AI chat
+      const formattedMessages = messages.map(m => ({
+        role: m.role === 'ai' ? 'assistant' : m.role,
+        content: sanitizeInput(m.content)
+      }));
+      
+      const systemMessage = {
+        role: 'system',
+        content: 'You are Hein, an AI assistant created by Hien2309. Answer in the user\'s language. Be accurate, concise, and helpful.'
+      };
+      
       try {
-        const r = await callAIRacing([sys, ...mm], 'chat', { temperature: 0.7, maxTokens: 500 });
-        msg = r.content;
-        model = r.modelId;
+        const result = await callAISequential(
+          [systemMessage, ...formattedMessages],
+          'chat',
+          { temperature: 0.7, maxTokens: 500 }
+        );
+        
+        responseMessage = result.content;
+        usedModel = result.modelId;
       } catch {
-        return res.status(500).json({ error: 'AI unavailable' });
+        return res.status(500).json({ error: 'AI service unavailable' });
       }
     }
 
-    const dt = ((Date.now() - t0) / 1000).toFixed(2);
-    msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources analyzed*` : `\n\n*${model.split('/')[1]} | ${dt}s*`;
+    const responseTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    responseMessage += isSearch 
+      ? `\n\n*${responseTime}s | ${sources.length} sources analyzed*`
+      : `\n\n*${usedModel.split('/')[1]} | ${responseTime}s*`;
 
-    const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: sanitizeInput(msg), timestamp: new Date().toISOString() }]).select().single();
-    if (me) return res.status(500).json({ error: 'Failed to save' });
+    // Save AI response
+    const { data: savedMessage, error: messageError } = await supabase
+      .from('messages')
+      .insert([{
+        chat_id: currentChatId,
+        role: 'ai',
+        content: sanitizeInput(responseMessage),
+        timestamp: new Date().toISOString()
+      }])
+      .select()
+      .single();
+    
+    if (messageError) {
+      return res.status(500).json({ error: 'Failed to save message' });
+    }
 
-    await supabase.from('chats').update({ last_message: sanitizeInput(uc).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', cid);
+    // Update chat metadata
+    await supabase
+      .from('chats')
+      .update({
+        last_message: sanitizeInput(userContent).substring(0, 100),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', currentChatId);
 
-    res.json({ message: msg, messageId: sm.id, chatId: cid, timestamp: sm.timestamp, isWebSearch: isSearch, usedModel: model });
-  } catch (e) {
-    console.error('Chat error:', e);
+    res.json({
+      message: responseMessage,
+      messageId: savedMessage.id,
+      chatId: currentChatId,
+      timestamp: savedMessage.timestamp,
+      isWebSearch: isSearch,
+      usedModel: usedModel
+    });
+    
+  } catch (error) {
+    console.error('Chat error:', error);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -960,56 +1257,140 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
-    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) return res.status(400).json({ error: 'Invalid prompt' });
-    if (prompt.length > 500) return res.status(400).json({ error: 'Prompt too long' });
+    
+    if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
+      return res.status(400).json({ error: 'Invalid prompt' });
+    }
+    
+    if (prompt.length > 500) {
+      return res.status(400).json({ error: 'Prompt too long (max 500 characters)' });
+    }
 
-    const sp = sanitizeInput(prompt);
-    const uid = req.user.id;
-    let cid = chatId;
+    const sanitizedPrompt = sanitizeInput(prompt);
+    const userId = req.user.id;
+    let currentChatId = chatId;
 
-    if (!cid) {
-      const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: `Image: ${sp.substring(0, 40)}` }]).select().single();
-      if (error) return res.status(500).json({ error: 'Failed to create chat' });
-      cid = c.id;
+    // Create chat if needed
+    if (!currentChatId) {
+      const { data: chat, error } = await supabase
+        .from('chats')
+        .insert([{
+          user_id: userId,
+          title: `Image: ${sanitizedPrompt.substring(0, 40)}`
+        }])
+        .select()
+        .single();
+      
+      if (error) {
+        return res.status(500).json({ error: 'Failed to create chat' });
+      }
+      
+      currentChatId = chat.id;
     } else {
-      const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
-      if (!c) return res.status(404).json({ error: 'Chat not found' });
-      cid = c.id;
+      const { data: chat } = await supabase
+        .from('chats')
+        .select('id')
+        .eq('id', currentChatId)
+        .eq('user_id', userId)
+        .maybeSingle();
+      
+      if (!chat) {
+        return res.status(404).json({ error: 'Chat not found' });
+      }
+      
+      currentChatId = chat.id;
     }
 
-    await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
+    // Save user prompt
+    await supabase.from('messages').insert([{
+      chat_id: currentChatId,
+      role: 'user',
+      content: sanitizedPrompt,
+      timestamp: new Date().toISOString()
+    }]);
 
-    const t0 = Date.now();
-    const ep = await enhancePrompt(sp, true);
-    const eqp = encodeURIComponent(ep);
-    const iurl = `https://image.pollinations.ai/prompt/${eqp}?width=1024&height=1024&nologo=true`;
+    const startTime = Date.now();
+    const enhancedPrompt = await enhancePrompt(sanitizedPrompt, true);
+    const encodedPrompt = encodeURIComponent(enhancedPrompt);
+    const imageUrl = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=1024&height=1024&nologo=true`;
 
-    const ir = await fetch(iurl, { method: 'GET', headers: { 'Accept': 'image/*' } });
-    if (!ir.ok) return res.status(500).json({ error: 'Image generation failed' });
-
-    const ct = ir.headers.get('content-type');
-    if (!ct || !ct.startsWith('image/')) return res.status(500).json({ error: 'Invalid image response' });
-
-    const buf = await ir.buffer();
-    const iid = uuidv4();
-    let furl = iurl;
-
-    const { error: se } = await supabase.storage.from('images').upload(`public/${iid}.png`, buf, { contentType: ct, upsert: true });
-    if (!se) {
-      const { data: sd } = await supabase.storage.from('images').createSignedUrl(`public/${iid}.png`, 86400);
-      if (sd?.signedUrl) furl = sd.signedUrl;
+    // Fetch image
+    const imageResponse = await fetch(imageUrl, {
+      method: 'GET',
+      headers: { 'Accept': 'image/*' }
+    });
+    
+    if (!imageResponse.ok) {
+      return res.status(500).json({ error: 'Image generation failed' });
     }
 
-    const v = await verifyImage(furl);
-    const dt = ((Date.now() - t0) / 1000).toFixed(2);
-    const mc = `![Image](${furl})\n\n*Enhanced: ${ep}*\n*${dt}s ${v.success ? '(verified)' : ''}*`;
+    const contentType = imageResponse.headers.get('content-type');
+    if (!contentType || !contentType.startsWith('image/')) {
+      return res.status(500).json({ error: 'Invalid image response' });
+    }
 
-    const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
-    if (me) return res.status(500).json({ error: 'Failed to save' });
+    const buffer = await imageResponse.buffer();
+    const imageId = uuidv4();
+    let finalUrl = imageUrl;
 
-    await supabase.from('chats').update({ last_message: `Image: ${sp.substring(0, 50)}`, updated_at: new Date().toISOString() }).eq('id', cid);
+    // Try to store in Supabase
+    const { error: storageError } = await supabase.storage
+      .from('images')
+      .upload(`public/${imageId}.png`, buffer, {
+        contentType: contentType,
+        upsert: true
+      });
+    
+    if (!storageError) {
+      const { data: signedData } = await supabase.storage
+        .from('images')
+        .createSignedUrl(`public/${imageId}.png`, 86400);
+      
+      if (signedData?.signedUrl) {
+        finalUrl = signedData.signedUrl;
+      }
+    }
 
-    res.json({ message: mc, imageUrl: furl, enhancedPrompt: ep, messageId: sm.id, chatId: cid, timestamp: sm.timestamp });
+    // Verify image
+    const verification = await verifyImage(finalUrl);
+    const responseTime = ((Date.now() - startTime) / 1000).toFixed(2);
+    
+    const messageContent = `![Image](${finalUrl})\n\n*Enhanced: ${enhancedPrompt}*\n*${responseTime}s ${verification.success ? '(verified)' : ''}*`;
+
+    // Save AI response
+    const { data: savedMessage, error: messageError } = await supabase
+      .from('messages')
+      .insert([{
+        chat_id: currentChatId,
+        role: 'ai',
+        content: messageContent,
+        timestamp: new Date().toISOString()
+      }])
+      .select()
+      .single();
+    
+    if (messageError) {
+      return res.status(500).json({ error: 'Failed to save message' });
+    }
+
+    // Update chat
+    await supabase
+      .from('chats')
+      .update({
+        last_message: `Image: ${sanitizedPrompt.substring(0, 50)}`,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', currentChatId);
+
+    res.json({
+      message: messageContent,
+      imageUrl: finalUrl,
+      enhancedPrompt: enhancedPrompt,
+      messageId: savedMessage.id,
+      chatId: currentChatId,
+      timestamp: savedMessage.timestamp
+    });
+    
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
@@ -1017,20 +1398,42 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
 app.get('/api/chat/history', authenticateToken, async (req, res) => {
   try {
-    const uid = req.user.id;
-    const pg = Math.max(1, parseInt(req.query.page) || 1);
-    const lim = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
-    const off = (pg - 1) * lim;
+    const userId = req.user.id;
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(Math.max(1, parseInt(req.query.limit) || 10), 50);
+    const offset = (page - 1) * limit;
 
-    const { data: chats, error } = await supabase.from('chats').select('id, title, last_message, created_at, updated_at').eq('user_id', uid).order('updated_at', { ascending: false }).range(off, off + lim - 1);
-    if (error) return res.status(500).json({ error: 'Failed to fetch history' });
+    const { data: chats, error } = await supabase
+      .from('chats')
+      .select('id, title, last_message, created_at, updated_at')
+      .eq('user_id', userId)
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+    
+    if (error) {
+      return res.status(500).json({ error: 'Failed to fetch history' });
+    }
 
-    const hist = await Promise.all(chats.map(async c => {
-      const { data: msgs } = await supabase.from('messages').select('id, role, content, timestamp').eq('chat_id', c.id).order('timestamp', { ascending: true }).limit(100);
-      return { ...c, messages: msgs || [] };
+    const history = await Promise.all(chats.map(async chat => {
+      const { data: messages } = await supabase
+        .from('messages')
+        .select('id, role, content, timestamp')
+        .eq('chat_id', chat.id)
+        .order('timestamp', { ascending: true })
+        .limit(100);
+      
+      return {
+        ...chat,
+        messages: messages || []
+      };
     }));
 
-    res.json({ history: hist, page: pg, limit: lim });
+    res.json({
+      history,
+      page,
+      limit
+    });
+    
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
@@ -1039,13 +1442,34 @@ app.get('/api/chat/history', authenticateToken, async (req, res) => {
 app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
   try {
     const { chatId } = req.params;
-    const uid = req.user.id;
-    if (!validate(chatId)) return res.status(400).json({ error: 'Invalid chat ID' });
-    const { data: c } = await supabase.from('chats').select('id').eq('id', chatId).eq('user_id', uid).maybeSingle();
-    if (!c) return res.status(404).json({ error: 'Chat not found' });
+    const userId = req.user.id;
+    
+    if (!validate(chatId)) {
+      return res.status(400).json({ error: 'Invalid chat ID' });
+    }
+    
+    const { data: chat } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('id', chatId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    if (!chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    // Delete messages first
     await supabase.from('messages').delete().eq('chat_id', chatId);
-    await supabase.from('chats').delete().eq('id', chatId).eq('user_id', uid);
-    res.json({ message: 'Chat deleted', chatId });
+    
+    // Delete chat
+    await supabase.from('chats').delete().eq('id', chatId).eq('user_id', userId);
+    
+    res.json({
+      message: 'Chat deleted successfully',
+      chatId
+    });
+    
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
@@ -1054,39 +1478,102 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
 app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
   try {
     const { messageId } = req.params;
-    const uid = req.user.id;
-    if (!validate(messageId)) return res.status(400).json({ error: 'Invalid message ID' });
-    const { data: m, error: me } = await supabase.from('messages').select('chat_id').eq('id', messageId).maybeSingle();
-    if (me || !m) return res.status(404).json({ error: 'Message not found' });
-    const { data: c, error: ce } = await supabase.from('chats').select('id').eq('id', m.chat_id).eq('user_id', uid).maybeSingle();
-    if (ce || !c) return res.status(404).json({ error: 'Chat not found' });
-    const { error: de } = await supabase.from('messages').delete().eq('id', messageId);
-    if (de) return res.status(500).json({ error: 'Failed to delete' });
-    const { data: lm } = await supabase.from('messages').select('content').eq('chat_id', m.chat_id).order('timestamp', { ascending: false }).limit(1).maybeSingle();
-    if (lm) await supabase.from('chats').update({ last_message: sanitizeInput(lm.content).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', m.chat_id);
-    res.json({ message: 'Message deleted', messageId });
+    const userId = req.user.id;
+    
+    if (!validate(messageId)) {
+      return res.status(400).json({ error: 'Invalid message ID' });
+    }
+    
+    const { data: message, error: messageError } = await supabase
+      .from('messages')
+      .select('chat_id')
+      .eq('id', messageId)
+      .maybeSingle();
+    
+    if (messageError || !message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+    
+    const { data: chat, error: chatError } = await supabase
+      .from('chats')
+      .select('id')
+      .eq('id', message.chat_id)
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    if (chatError || !chat) {
+      return res.status(404).json({ error: 'Chat not found' });
+    }
+    
+    const { error: deleteError } = await supabase
+      .from('messages')
+      .delete()
+      .eq('id', messageId);
+    
+    if (deleteError) {
+      return res.status(500).json({ error: 'Failed to delete message' });
+    }
+    
+    // Update last message
+    const { data: lastMessage } = await supabase
+      .from('messages')
+      .select('content')
+      .eq('chat_id', message.chat_id)
+      .order('timestamp', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (lastMessage) {
+      await supabase
+        .from('chats')
+        .update({
+          last_message: sanitizeInput(lastMessage.content).substring(0, 100),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', message.chat_id);
+    }
+    
+    res.json({
+      message: 'Message deleted successfully',
+      messageId
+    });
+    
   } catch {
     res.status(500).json({ error: 'Server error' });
   }
 });
 
+// Catch-all route for SPA
 app.get('*', (req, res) => {
-  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not found' });
-  const idx = path.join(__dirname, 'test', 'frontend', 'dist', 'index.html');
-  res.sendFile(idx, err => {
-    if (err) res.status(500).json({ error: 'Failed to serve' });
+  if (req.path.startsWith('/api/')) {
+    return res.status(404).json({ error: 'API endpoint not found' });
+  }
+  
+  const indexPath = path.join(__dirname, 'test', 'frontend', 'dist', 'index.html');
+  res.sendFile(indexPath, err => {
+    if (err) {
+      res.status(500).json({ error: 'Failed to serve application' });
+    }
   });
 });
 
+// Error handling middleware
 app.use((err, req, res, next) => {
   console.error(`Error: ${err.message}`);
-  if (err.message === 'CORS') return res.status(403).json({ error: 'CORS error' });
+  
+  if (err.message === 'CORS not allowed') {
+    return res.status(403).json({ error: 'CORS error' });
+  }
+  
   res.status(500).json({ error: 'Internal server error' });
 });
 
-const server = app.listen(process.env.PORT || 3001, () => {
+// ========== SERVER STARTUP ==========
+
+const PORT = process.env.PORT || 3001;
+const server = app.listen(PORT, () => {
   console.log('========================================');
-  console.log(`Server running on port ${process.env.PORT || 3001}`);
+  console.log(`Server running on port ${PORT}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('\n🚀 Enhanced Features:');
@@ -1099,23 +1586,20 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   ✓ Intelligent fallback system');
   console.log('   ✓ Sequential fallback with all models');
   console.log('\n🔍 Enhanced Smart Search Pipeline:');
-  console.log('   1. Detect query type (product/brand/tech/general)');
-  console.log('   2. AI suggests 7 best websites (DeepResearch)');
-  console.log('   3. Search specific sites with enhanced queries');
-  console.log('   4. Crawl actual content + extract specifications');
-  console.log('   5. Synthesize with context-aware AI (DeepSeek)');
+  console.log('   1. Detect query type');
+  console.log('   2. AI suggests 7 best websites');
+  console.log('   3. Search specific sites');
+  console.log('   4. Crawl content + extract specifications');
+  console.log('   5. Synthesize with context-aware AI');
   console.log('   6. Fallback to standard search if needed');
-  console.log('\n📱 Supported Product Patterns:');
-  console.log('   • Laptops: Dell/HP/Lenovo/ASUS + model number');
-  console.log('   • Phones: iPhone/Galaxy/Pixel + version');
-  console.log('   • Components: RTX/GTX/Radeon + model');
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
   console.log('\nVersion: 4.2 - Enhanced Product Search & Query Detection');
   console.log('========================================\n');
 });
 
+// Graceful shutdown
 process.on('SIGTERM', () => {
-  console.log('Shutting down...');
+  console.log('SIGTERM received, shutting down gracefully...');
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
@@ -1123,7 +1607,7 @@ process.on('SIGTERM', () => {
 });
 
 process.on('SIGINT', () => {
-  console.log('Shutting down...');
+  console.log('\nSIGINT received, shutting down gracefully...');
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
