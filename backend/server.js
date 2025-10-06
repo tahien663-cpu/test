@@ -400,29 +400,37 @@ async function smartSearch(query) {
     console.log(`   Found ${searchResults.length} search results`);
     
     console.log('📥 Step 3: Crawling webpages...');
-    const topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 3);
+    let topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 3);
+    
+    // Nếu không có search results, crawl trực tiếp suggested sites
+    if (topUrls.length === 0) {
+      console.log('   No search results, crawling suggested sites directly...');
+      topUrls = suggestedSites.slice(0, 3);
+    }
     
     if (topUrls.length === 0) {
-      console.log('   No URLs to crawl, trying fallback search');
+      console.log('   No URLs to crawl, using fallback search');
       return await searchWebFallback(query);
     }
     
     const crawlPromises = topUrls.map(url => crawlWebpage(url));
     const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
-    console.log(`   Crawled ${crawledData.length} pages successfully`);
+    console.log(`   Crawled ${crawledData.length}/${topUrls.length} pages successfully`);
     
-    if (crawledData.length === 0 && searchResults.length === 0) {
-      console.log('   No data crawled, using fallback search');
-      return await searchWebFallback(query);
+    // Nếu crawl được ít nhất 1 trang, hoặc có search results, coi như thành công
+    if (crawledData.length > 0 || searchResults.length > 0) {
+      return {
+        query,
+        suggestedSites,
+        searchResults,
+        crawledData,
+        totalSources: crawledData.length + searchResults.length
+      };
     }
     
-    return {
-      query,
-      suggestedSites,
-      searchResults,
-      crawledData,
-      totalSources: crawledData.length + searchResults.length
-    };
+    // Nếu không có gì cả, fallback
+    console.log('   No data found, using fallback search');
+    return await searchWebFallback(query);
   } catch (e) {
     console.error('   Smart search error:', e.message);
     console.log('   Falling back to standard search');
@@ -489,22 +497,27 @@ async function summarizeSearchResults(query, searchData) {
   
   try {
     let context = '';
+    let sourceCount = 0;
     
+    // Thêm nội dung đã crawl (ưu tiên cao nhất)
     if (searchData.crawledData && searchData.crawledData.length > 0) {
       context += '=== CRAWLED CONTENT ===\n\n';
       searchData.crawledData.forEach((data, i) => {
-        context += `[${i + 1}] ${data.title}\nURL: ${data.url}\n${data.content.substring(0, 1000)}\n\n`;
+        context += `[${i + 1}] ${data.title}\nURL: ${data.url}\n${data.content.substring(0, 1500)}\n\n`;
+        sourceCount++;
       });
     }
     
+    // Thêm kết quả search nếu có
     if (searchData.searchResults && searchData.searchResults.length > 0) {
       context += '\n=== SEARCH RESULTS ===\n\n';
       searchData.searchResults.slice(0, 5).forEach((r, i) => {
-        context += `[${i + 1}] ${r.title}\n${r.snippet.substring(0, 200)}\nSource: ${r.source}\n\n`;
+        context += `[${sourceCount + i + 1}] ${r.title}\n${r.snippet.substring(0, 300)}\nSource: ${r.source}\n\n`;
       });
     }
     
-    context = context.substring(0, 4000);
+    // Giới hạn context length
+    context = context.substring(0, 5000);
     
     const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
     
@@ -515,25 +528,37 @@ async function summarizeSearchResults(query, searchData) {
 Language: ${isVN ? 'Vietnamese' : 'English'}
 Format:
 1. Direct answer (2-3 sentences)
-2. Key points (3-5 bullet points with details)
+2. Key points (bullet points with details)
 3. Cite sources using [1], [2], etc.
-Be comprehensive but concise. Max 400 words.`
+Be comprehensive but concise. Max 500 words.
+If information is limited or unclear, acknowledge it honestly.`
       },
       { role: 'user', content: `Query: "${query}"\n\nInformation:\n${context}` }
-    ], 'chat', { temperature: 0.3, maxTokens: 600 });
+    ], 'chat', { temperature: 0.3, maxTokens: 700 });
     
     let summary = r.content.trim().replace(/\*\*/g, '');
     
+    // Thêm nguồn tham khảo
     const sources = [];
     if (searchData.crawledData) {
       searchData.crawledData.forEach((d, i) => {
-        const domain = new URL(d.url).hostname.replace('www.', '');
-        sources.push(`[${i + 1}] [${domain}](${d.url})`);
+        try {
+          const domain = new URL(d.url).hostname.replace('www.', '');
+          sources.push(`[${i + 1}] [${domain}](${d.url})`);
+        } catch (e) {
+          sources.push(`[${i + 1}] ${d.url}`);
+        }
       });
     }
     if (searchData.searchResults && sources.length < 5) {
       searchData.searchResults.slice(0, 5 - sources.length).forEach((r, i) => {
-        if (r.link) sources.push(`[${sources.length + 1}] [${r.source}](${r.link})`);
+        if (r.link) {
+          try {
+            sources.push(`[${sources.length + 1}] [${r.source}](${r.link})`);
+          } catch (e) {
+            sources.push(`[${sources.length + 1}] ${r.source}`);
+          }
+        }
       });
     }
     
