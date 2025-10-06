@@ -1,6 +1,6 @@
 {
   "name": "hein-ai-backend",
-  "version": "1.0.0",
+  "version": "4.0.0",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -28,5 +28,20 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.2"
-  }
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "description": "AI Chat Backend with Smart Web Crawling - DeepSeek Priority",
+  "keywords": [
+    "ai",
+    "chatbot",
+    "deepseek",
+    "web-crawling",
+    "search",
+    "express",
+    "supabase"
+  ],
+  "author": "Hien2309",
+  "license": "MIT"
 }
