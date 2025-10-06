@@ -145,7 +145,7 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
         }
         
         updateModelStats(model.id, false);
-        continue; // Try next model
+        continue;
       }
       
       const data = await r.json();
@@ -173,7 +173,7 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
       }
       
       updateModelStats(model.id, false);
-      continue; // Try next model
+      continue;
     }
   }
   
@@ -196,6 +196,132 @@ async function enhancePrompt(txt, isImg = false) {
     return e.length > max ? e.substring(0, max - 3) + '...' : e;
   } catch {
     return txt;
+  }
+}
+
+// ========== IMPROVED SEARCH DETECTION ==========
+
+function hasExplicitSearchKeyword(msg) {
+  const explicitPrefixes = [
+    /^tìm kiếm:/i,
+    /^search:/i,
+    /^tra cứu:/i,
+    /^google:/i,
+    /^tìm:/i,
+    /^find:/i,
+    /^lookup:/i
+  ];
+  
+  return explicitPrefixes.some(prefix => prefix.test(msg.trim()));
+}
+
+function isProductQuery(msg) {
+  const ml = msg.toLowerCase();
+  
+  const productPatterns = [
+    /\b(dell|hp|lenovo|asus|acer|msi|apple|samsung|xiaomi|oppo|vivo)\s+[a-z]?\d{3,}/i,
+    /\b(iphone|galaxy|pixel|macbook|thinkpad|inspiron|latitude|pavilion|vivobook)\s+\d+/i,
+    /\b(rtx|gtx|radeon)\s+\d{4}/i,
+    /(giá|price)\s+(của\s+)?(dell|hp|lenovo|iphone|samsung|xiaomi|laptop|phone)/i,
+    /(cấu hình|specs?|specification|thông số|review|đánh giá)\s+(của\s+)?[a-z]+\s*\d+/i,
+    /\b(mua|buy|bán|selling)\s+(dell|hp|lenovo|iphone|samsung|laptop|phone)/i
+  ];
+  
+  return productPatterns.some(p => p.test(msg));
+}
+
+function isRealTimeQuery(msg) {
+  const ml = msg.toLowerCase();
+  
+  const realTimeIndicators = [
+    /\b(hôm nay|today|ngày hôm nay)\b/i,
+    /\b(bây giờ|now|hiện tại|current|currently)\b/i,
+    /\b(tin tức|news|mới nhất|latest|gần đây|recent)\b/i,
+    /\b(thời tiết|weather|nhiệt độ|temperature|forecast|dự báo)\b/i,
+    /\b(giá bitcoin|bitcoin price|crypto price|tỷ giá|exchange rate)\b/i,
+    /\b(năm\s+(20\d{2}|nay|này|next)|year\s+(20\d{2}|next))\b/i,
+    /\b(sự kiện|event|diễn ra|happening|occurred)\b.*\b(hôm nay|today|recently|gần đây)\b/i
+  ];
+  
+  return realTimeIndicators.some(p => p.test(msg));
+}
+
+function isSpecificFactualQuestion(msg) {
+  const ml = msg.toLowerCase();
+  
+  // Only SPECIFIC factual questions about real people/places/products
+  const specificFactual = [
+    /\b(là ai|who is|ai là)\b\s+[A-Z][a-z]+/i, // Who is [Name]
+    /\b(ceo|founder|president|giám đốc|chủ tịch)\s+(của|of)\s+[a-z]+/i,
+    /\b(ở đâu|where is|where)\b.*\b(công ty|company|trụ sở|headquarters)/i,
+    /\b(khi nào|when)\b.*\b(ra mắt|released|launch|phát hành)/i,
+    /\b(bao nhiêu|how much|how many)\b.*\b(giá|price|cost|phí)/i
+  ];
+  
+  return specificFactual.some(p => p.test(msg));
+}
+
+function shouldNotSearch(msg) {
+  const ml = msg.toLowerCase();
+  
+  // Definitely NOT search - general knowledge, coding, creative tasks
+  const noSearchPatterns = [
+    /^(giải thích|explain|định nghĩa|define|cho tôi biết|tell me about|what does|nghĩa là gì)/i,
+    /^(làm thế nào|how to|cách|way to|hướng dẫn|guide|tutorial)/i,
+    /^(viết|write|tạo|create|code|lập trình|program|develop)/i,
+    /^(tính|calculate|giải|solve|compute)/i,
+    /^(dịch|translate|chuyển)/i,
+    /^(so sánh|compare|khác nhau|difference between)\s+(khái niệm|concept|idea)/i,
+    /^(ưu điểm|advantage|nhược điểm|disadvantage)\s+(của|of)\s+(việc|the)/i,
+    /\b(là gì|what is)\b\s+(trong|in)\s+(toán học|math|lập trình|programming|khoa học|science)/i,
+    /^(tóm tắt|summarize|tổng hợp|analyze)/i,
+    /^(nghĩ|think|cảm thấy|feel|ý kiến|opinion)/i,
+    /\b(code|function|algorithm|thuật toán|hàm|biến|variable)\b/i,
+    /\b(học|learn|studying|nghiên cứu|research)\s+(về|about)/i
+  ];
+  
+  return noSearchPatterns.some(p => p.test(msg));
+}
+
+async function shouldSearchWeb(msg) {
+  try {
+    // 1. Có keyword rõ ràng -> SEARCH
+    if (hasExplicitSearchKeyword(msg)) {
+      console.log('   ✓ Explicit search keyword detected');
+      return true;
+    }
+    
+    // 2. Chắc chắn KHÔNG search
+    if (shouldNotSearch(msg)) {
+      console.log('   ✗ General knowledge/coding query - no search');
+      return false;
+    }
+    
+    // 3. Product query -> SEARCH
+    if (isProductQuery(msg)) {
+      console.log('   ✓ Product query detected');
+      return true;
+    }
+    
+    // 4. Real-time query -> SEARCH
+    if (isRealTimeQuery(msg)) {
+      console.log('   ✓ Real-time query detected');
+      return true;
+    }
+    
+    // 5. Specific factual question -> SEARCH
+    if (isSpecificFactualQuestion(msg)) {
+      console.log('   ✓ Specific factual question detected');
+      return true;
+    }
+    
+    // 6. Nếu không rõ ràng, KHÔNG search (default to chat)
+    console.log('   ✗ General query - using chat');
+    return false;
+    
+  } catch (e) {
+    console.error('   Error in shouldSearchWeb:', e.message);
+    return false; // Default to chat on error
   }
 }
 
@@ -615,32 +741,6 @@ Max 600 words.`;
   }
 }
 
-async function shouldSearchWeb(msg) {
-  try {
-    const searchKw = [
-      'tìm kiếm', 'tra cứu', 'là gì', 'là ai', 'thông số', 'giá', 'cấu hình',
-      'review', 'đánh giá', 'so sánh', 'tin tức', 'mới nhất', 'specs',
-      'search', 'find', 'what is', 'price', 'latest', 'compare'
-    ];
-    
-    const ml = msg.toLowerCase();
-    if (searchKw.some(kw => ml.includes(kw))) return true;
-    
-    if (ml.includes('?') && (ml.includes('năm') || ml.includes('year') || ml.includes('hôm nay') || ml.includes('today'))) {
-      return true;
-    }
-    
-    const r = await callAISingleModel([
-      { role: 'system', content: 'Analyze if query needs web search. Reply ONLY "YES" or "NO". YES for: current events, news, real-time data, product info. NO for: general knowledge, coding.' },
-      { role: 'user', content: `Search needed: "${msg}"` }
-    ], 'quick', { temperature: 0.1, maxTokens: 10 });
-    
-    return r.content.trim().toUpperCase() === 'YES';
-  } catch {
-    return ['tìm kiếm', 'search', 'là gì', 'what is'].some(kw => msg.toLowerCase().includes(kw));
-  }
-}
-
 async function verifyImage(url) {
   await new Promise(r => setTimeout(r, 2000));
   for (let i = 1; i <= 3; i++) {
@@ -701,7 +801,7 @@ function authenticateToken(req, res, next) {
 // ========== ROUTES ==========
 
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', version: '4.3', strategy: 'Single Model (60s timeout)', features: ['Smart Fallback', 'Rate Limit Protection', 'Enhanced Search', 'Product Detection'] });
+  res.json({ status: 'OK', version: '4.4', strategy: 'Smart Search Detection', features: ['Improved Detection', 'No False Positives', 'Product Detection', 'Real-time Queries'] });
 });
 
 app.get('/health', async (req, res) => {
@@ -725,7 +825,7 @@ app.get('/api/model-stats', (req, res) => {
       rateLimits: d.rateLimitCount
     };
   }
-  res.json({ stats, strategy: 'Single model per request with smart fallback' });
+  res.json({ stats, strategy: 'Smart search detection with no false positives' });
 });
 
 app.post('/api/register', authLimiter, async (req, res) => {
@@ -790,23 +890,22 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     const t0 = Date.now();
     let msg = '', model = '', modelName = '', isSearch = false, srcs = [];
 
-    const kw = ['tìm kiếm:', 'search:', 'tra cứu:'];
-    const hasKw = kw.some(k => uc.toLowerCase().startsWith(k.toLowerCase()));
-    const doSearch = hasKw || await shouldSearchWeb(uc);
-
-    if (doSearch) {
-      isSearch = true;
+    // Check for explicit search keywords first
+    const hasExplicitKeyword = hasExplicitSearchKeyword(uc);
+    
+    if (hasExplicitKeyword) {
+      // Remove keyword prefix
+      const kw = ['tìm kiếm:', 'search:', 'tra cứu:', 'google:', 'tìm:', 'find:', 'lookup:'];
       let q = uc;
-      if (hasKw) {
-        for (const k of kw) {
-          if (uc.toLowerCase().startsWith(k.toLowerCase())) {
-            q = uc.substring(k.length).trim();
-            break;
-          }
+      for (const k of kw) {
+        if (uc.toLowerCase().startsWith(k.toLowerCase())) {
+          q = uc.substring(k.length).trim();
+          break;
         }
       }
       
-      console.log(`\n🔍 Enhanced search: "${q}"`);
+      isSearch = true;
+      console.log(`\n🔍 Explicit search: "${q}"`);
       const searchData = await smartSearch(q);
       
       if (searchData.totalSources > 0) {
@@ -819,15 +918,36 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
         modelName = 'Search';
       }
     } else {
-      const mm = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: sanitizeInput(m.content) }));
-      const sys = { role: 'system', content: 'You are Hein, an AI assistant by Hien2309. Answer in user\'s language. Be accurate, concise, helpful.' };
-      try {
-        const r = await callAISingleModel([sys, ...mm], 'chat', { temperature: 0.7, maxTokens: 500 });
-        msg = r.content;
-        model = r.modelId;
-        modelName = r.modelName;
-      } catch {
-        return res.status(500).json({ error: 'AI unavailable' });
+      // Check if should search (using improved detection)
+      const doSearch = await shouldSearchWeb(uc);
+      
+      if (doSearch) {
+        isSearch = true;
+        console.log(`\n🔍 Auto search: "${uc}"`);
+        const searchData = await smartSearch(uc);
+        
+        if (searchData.totalSources > 0) {
+          srcs = searchData.suggestedSites.slice(0, 5);
+          msg = await summarizeSearchResults(uc, searchData);
+          modelName = 'Smart Search';
+          model = 'enhanced-search';
+        } else {
+          msg = 'Không tìm thấy thông tin phù hợp.';
+          modelName = 'Search';
+        }
+      } else {
+        // Regular chat
+        console.log(`\n💬 Chat mode: "${uc.substring(0, 50)}..."`);
+        const mm = messages.map(m => ({ role: m.role === 'ai' ? 'assistant' : m.role, content: sanitizeInput(m.content) }));
+        const sys = { role: 'system', content: 'You are Hein, an AI assistant by Hien2309. Answer in user\'s language. Be accurate, concise, helpful.' };
+        try {
+          const r = await callAISingleModel([sys, ...mm], 'chat', { temperature: 0.7, maxTokens: 500 });
+          msg = r.content;
+          model = r.modelId;
+          modelName = r.modelName;
+        } catch {
+          return res.status(500).json({ error: 'AI unavailable' });
+        }
       }
     }
 
@@ -976,13 +1096,18 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\n🚀 SINGLE MODEL STRATEGY v4.3');
-  console.log('   ✓ Use ONE model per request (60s timeout)');
-  console.log('   ✓ Fallback only on failure/timeout');
-  console.log('   ✓ Rate limit protection (5min cooldown)');
-  console.log('   ✓ Enhanced smart web search');
-  console.log('   ✓ Product-specific detection');
-  console.log('   ✓ Multi-source crawling');
+  console.log('\n🚀 SMART SEARCH DETECTION v4.4');
+  console.log('   ✓ Improved search vs chat detection');
+  console.log('   ✓ No false positives for coding/knowledge');
+  console.log('   ✓ Product-specific queries auto-detected');
+  console.log('   ✓ Real-time/news queries auto-detected');
+  console.log('   ✓ Explicit keywords supported');
+  console.log('\n🎯 Detection Logic:');
+  console.log('   • Explicit: "tìm kiếm:", "search:"');
+  console.log('   • Products: Dell 5420, iPhone 15, etc.');
+  console.log('   • Real-time: news, weather, prices');
+  console.log('   • Specific facts: CEO of X, price of Y');
+  console.log('   • DEFAULT: Chat mode (no search)');
   console.log('\n📊 Model Order:');
   console.log('   Chat: DeepSeek → Gemini → Qwen → Llama');
   console.log('   Quick: Qwen → Gemini → DeepSeek');
