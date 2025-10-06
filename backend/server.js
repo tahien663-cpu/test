@@ -32,7 +32,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// DeepSeek luôn đầu tiên, timeout 60s
+// DeepSeek luôn đầu tiên cho chat, DeepResearch cho nghiên cứu
 const AI_MODELS = {
   chat: [
     { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 60000 },
@@ -42,9 +42,14 @@ const AI_MODELS = {
   ],
   quick: [
     { id: 'qwen/qwen3-4b:free', timeout: 6000 },
-    { id: 'google/gemini-2.0-flash-exp:free', timeout: 7000 }
+    { id: 'google/gemini-2.0-flash-exp:free', timeout: 7000 },
+    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 10000 }
   ],
-  research: [{ id: 'alibaba/tongyi-deepresearch-30b-a3b:free', timeout: 20000 }]
+  research: [
+    { id: 'alibaba/tongyi-deepresearch-30b-a3b:free', timeout: 25000 },
+    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 15000 },
+    { id: 'google/gemini-2.0-flash-exp:free', timeout: 10000 }
+  ]
 };
 
 const modelStats = new Map();
@@ -171,34 +176,92 @@ async function enhancePrompt(txt, isImg = false) {
   }
 }
 
-// BƯỚC 1: Hỏi AI nên tìm ở đâu
+function getFallbackSites(query, isVietnamese) {
+  const queryLower = query.toLowerCase();
+  
+  if (queryLower.includes('iphone') || queryLower.includes('apple')) {
+    return isVietnamese 
+      ? ['https://www.apple.com', 'https://tinhte.vn', 'https://genk.vn', 'https://www.gsmarena.com', 'https://vnexpress.net']
+      : ['https://www.apple.com', 'https://www.gsmarena.com', 'https://www.macrumors.com', 'https://www.theverge.com', 'https://www.cnet.com'];
+  }
+  
+  if (queryLower.includes('samsung') || queryLower.includes('galaxy')) {
+    return isVietnamese
+      ? ['https://www.samsung.com', 'https://tinhte.vn', 'https://www.gsmarena.com', 'https://genk.vn', 'https://vnexpress.net']
+      : ['https://www.samsung.com', 'https://www.gsmarena.com', 'https://www.androidauthority.com', 'https://www.theverge.com', 'https://www.cnet.com'];
+  }
+  
+  if (queryLower.includes('laptop') || queryLower.includes('computer') || queryLower.includes('pc')) {
+    return isVietnamese
+      ? ['https://tinhte.vn', 'https://genk.vn', 'https://www.notebookcheck.net', 'https://thegioididong.com', 'https://vnexpress.net']
+      : ['https://www.notebookcheck.net', 'https://www.laptopmag.com', 'https://www.pcmag.com', 'https://www.theverge.com', 'https://www.tomshardware.com'];
+  }
+  
+  return isVietnamese
+    ? ['https://vi.wikipedia.org', 'https://vnexpress.net', 'https://tinhte.vn', 'https://genk.vn', 'https://en.wikipedia.org']
+    : ['https://en.wikipedia.org', 'https://www.bbc.com', 'https://www.theverge.com', 'https://www.cnet.com', 'https://www.reuters.com'];
+}
+
 async function suggestWebsites(query) {
   try {
-    const r = await callAISequential([
-      { 
-        role: 'system', 
-        content: `You are a search expert. Suggest 3-5 best websites to find information about the query. 
-Format: JSON array only, no explanation.
+    const isVietnamese = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query);
+    
+    const systemPrompt = isVietnamese 
+      ? `Bạn là chuyên gia tìm kiếm. Đề xuất 5 trang web tốt nhất để tìm thông tin về câu hỏi.
+CHỈ trả về mảng JSON, không giải thích gì thêm.
+Ví dụ: ["https://www.apple.com", "https://www.gsmarena.com", "https://www.theverge.com"]
+Ưu tiên: trang chính thức, trang review công nghệ, trang tin tức uy tín, wikipedia.
+Với câu hỏi tiếng Việt, bao gồm cả trang Việt: vnexpress.net, tinhte.vn, genk.vn, v.v.
+QUAN TRỌNG: Chỉ đưa ra link LIÊN QUAN TRỰC TIẾP nhất đến câu hỏi.`
+      : `You are a search expert. Suggest 5 best websites to find information about the query.
+Return ONLY a JSON array, no explanation.
 Example: ["https://www.apple.com", "https://www.gsmarena.com", "https://www.theverge.com"]
-Prioritize: official sites, tech review sites, news sites, wikipedia.
-For Vietnamese queries, include Vietnamese sites like vnexpress.net, tinhte.vn, etc.`
-      },
-      { role: 'user', content: `Best websites to search for: "${query}"` }
-    ], 'quick', { temperature: 0.3, maxTokens: 200 });
+Prioritize: official sites, tech review sites, trusted news sites, wikipedia.
+For Vietnamese queries, include Vietnamese sites like vnexpress.net, tinhte.vn, genk.vn, etc.
+IMPORTANT: Only suggest links MOST RELEVANT to the query.`;
+
+    const userPrompt = isVietnamese 
+      ? `Gợi ý 5 trang web tốt nhất để tìm kiếm: "${query}"`
+      : `Suggest 5 best websites to search for: "${query}"`;
+
+    let r;
+    try {
+      r = await callAISequential([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ], 'research', { temperature: 0.2, maxTokens: 300 });
+    } catch (researchError) {
+      console.log('   Research model failed, trying quick models...');
+      r = await callAISequential([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ], 'quick', { temperature: 0.2, maxTokens: 300 });
+    }
     
     const content = r.content.trim();
-    const jsonMatch = content.match(/\[.*?\]/s);
-    if (!jsonMatch) return [];
+    const jsonMatch = content.match(/\[[\s\S]*?\]/);
+    if (!jsonMatch) {
+      console.log('   No JSON array found in response, using fallback sites');
+      return getFallbackSites(query, isVietnamese);
+    }
     
     const sites = JSON.parse(jsonMatch[0]);
-    return sites.filter(s => s.startsWith('http')).slice(0, 5);
+    const validSites = sites
+      .filter(s => typeof s === 'string' && s.startsWith('http'))
+      .slice(0, 5);
+    
+    if (validSites.length === 0) {
+      console.log('   No valid sites found, using fallback');
+      return getFallbackSites(query, isVietnamese);
+    }
+    
+    return validSites;
   } catch (e) {
-    console.error('Error suggesting websites:', e);
-    return [];
+    console.error('   Error suggesting websites:', e.message);
+    return getFallbackSites(query, /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(query));
   }
 }
 
-// BƯỚC 2: Tìm kiếm trên Google/DuckDuckGo với site-specific
 async function searchSpecificSites(query, sites) {
   const results = [];
   
@@ -208,7 +271,6 @@ async function searchSpecificSites(query, sites) {
       const searchQuery = `${query} site:${domain}`;
       const eq = encodeURIComponent(searchQuery);
       
-      // Tìm trên DuckDuckGo
       const ctrl = new AbortController();
       const timeout = setTimeout(() => ctrl.abort(), 8000);
       
@@ -254,7 +316,6 @@ async function searchSpecificSites(query, sites) {
   return results;
 }
 
-// BƯỚC 3: Crawl nội dung từ các trang web
 async function crawlWebpage(url) {
   try {
     const ctrl = new AbortController();
@@ -279,16 +340,12 @@ async function crawlWebpage(url) {
     const html = await r.text();
     const $ = cheerio.load(html);
     
-    // Xóa các element không cần thiết
     $('script, style, nav, header, footer, iframe, noscript').remove();
     
-    // Lấy title
     const title = $('title').text().trim() || $('h1').first().text().trim();
     
-    // Lấy nội dung chính
     let content = '';
     
-    // Thử các selector phổ biến cho nội dung chính
     const contentSelectors = [
       'article',
       '[role="main"]',
@@ -308,17 +365,15 @@ async function crawlWebpage(url) {
       }
     }
     
-    // Nếu không tìm thấy, lấy body
     if (!content) {
       content = $('body').text();
     }
     
-    // Làm sạch content
     content = content
       .replace(/\s+/g, ' ')
       .replace(/\n+/g, '\n')
       .trim()
-      .substring(0, 3000); // Giới hạn 3000 ký tự
+      .substring(0, 3000);
     
     return { title, content, url };
   } catch (e) {
@@ -327,43 +382,54 @@ async function crawlWebpage(url) {
   }
 }
 
-// BƯỚC 4: Tổng hợp thông tin từ nhiều nguồn
 async function smartSearch(query) {
   console.log(`\n🔍 Smart Search: "${query}"`);
   
-  // Bước 1: Hỏi AI nên tìm ở đâu
-  console.log('📍 Step 1: Suggesting websites...');
-  const suggestedSites = await suggestWebsites(query);
-  console.log(`   Found ${suggestedSites.length} suggested sites:`, suggestedSites);
-  
-  if (suggestedSites.length === 0) {
-    // Fallback: dùng search thông thường
+  try {
+    console.log('📍 Step 1: Suggesting websites...');
+    const suggestedSites = await suggestWebsites(query);
+    console.log(`   Found ${suggestedSites.length} suggested sites:`, suggestedSites);
+    
+    if (suggestedSites.length === 0) {
+      console.log('   No suggested sites, using fallback search');
+      return await searchWebFallback(query);
+    }
+    
+    console.log('🔎 Step 2: Searching specific sites...');
+    const searchResults = await searchSpecificSites(query, suggestedSites);
+    console.log(`   Found ${searchResults.length} search results`);
+    
+    console.log('📥 Step 3: Crawling webpages...');
+    const topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 3);
+    
+    if (topUrls.length === 0) {
+      console.log('   No URLs to crawl, trying fallback search');
+      return await searchWebFallback(query);
+    }
+    
+    const crawlPromises = topUrls.map(url => crawlWebpage(url));
+    const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
+    console.log(`   Crawled ${crawledData.length} pages successfully`);
+    
+    if (crawledData.length === 0 && searchResults.length === 0) {
+      console.log('   No data crawled, using fallback search');
+      return await searchWebFallback(query);
+    }
+    
+    return {
+      query,
+      suggestedSites,
+      searchResults,
+      crawledData,
+      totalSources: crawledData.length + searchResults.length
+    };
+  } catch (e) {
+    console.error('   Smart search error:', e.message);
+    console.log('   Falling back to standard search');
     return await searchWebFallback(query);
   }
-  
-  // Bước 2: Tìm URLs cụ thể từ các site đó
-  console.log('🔎 Step 2: Searching specific sites...');
-  const searchResults = await searchSpecificSites(query, suggestedSites);
-  console.log(`   Found ${searchResults.length} search results`);
-  
-  // Bước 3: Crawl nội dung từ top URLs
-  console.log('📥 Step 3: Crawling webpages...');
-  const topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 3);
-  const crawlPromises = topUrls.map(url => crawlWebpage(url));
-  const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
-  console.log(`   Crawled ${crawledData.length} pages successfully`);
-  
-  // Bước 4: Tổng hợp kết quả
-  return {
-    query,
-    suggestedSites,
-    searchResults,
-    crawledData,
-    totalSources: crawledData.length
-  };
 }
 
-// Fallback search nếu smart search thất bại
 async function searchWebFallback(query) {
   const ctrl = new AbortController();
   const timeout = setTimeout(() => ctrl.abort(), 20000);
@@ -416,17 +482,14 @@ async function searchWebFallback(query) {
   }
 }
 
-// Tóm tắt kết quả tìm kiếm bằng AI
 async function summarizeSearchResults(query, searchData) {
   if (searchData.totalSources === 0) {
     return 'Không tìm thấy thông tin phù hợp.';
   }
   
   try {
-    // Chuẩn bị dữ liệu để gửi cho AI
     let context = '';
     
-    // Thêm nội dung đã crawl (ưu tiên cao nhất)
     if (searchData.crawledData && searchData.crawledData.length > 0) {
       context += '=== CRAWLED CONTENT ===\n\n';
       searchData.crawledData.forEach((data, i) => {
@@ -434,7 +497,6 @@ async function summarizeSearchResults(query, searchData) {
       });
     }
     
-    // Thêm kết quả search
     if (searchData.searchResults && searchData.searchResults.length > 0) {
       context += '\n=== SEARCH RESULTS ===\n\n';
       searchData.searchResults.slice(0, 5).forEach((r, i) => {
@@ -442,7 +504,6 @@ async function summarizeSearchResults(query, searchData) {
       });
     }
     
-    // Giới hạn context length
     context = context.substring(0, 4000);
     
     const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệ]/i.test(query);
@@ -463,7 +524,6 @@ Be comprehensive but concise. Max 400 words.`
     
     let summary = r.content.trim().replace(/\*\*/g, '');
     
-    // Thêm nguồn tham khảo
     const sources = [];
     if (searchData.crawledData) {
       searchData.crawledData.forEach((d, i) => {
@@ -488,7 +548,6 @@ Be comprehensive but concise. Max 400 words.`
   }
 }
 
-// Kiểm tra có cần search không
 async function shouldSearchWeb(msg) {
   try {
     const searchKeywords = [
@@ -570,7 +629,7 @@ function authenticateToken(req, res, next) {
   });
 }
 
-app.get('/', (req, res) => res.json({ status: 'OK', version: '4.0', features: ['DeepSeek Priority', 'Smart Web Crawling', 'AI-Suggested Sources', 'Multi-page Analysis'] }));
+app.get('/', (req, res) => res.json({ status: 'OK', version: '4.1', features: ['DeepSeek Priority', 'Smart Web Crawling', 'AI-Suggested Sources', 'Multi-page Analysis', 'DeepResearch Integration'] }));
 
 app.get('/health', async (req, res) => {
   try {
@@ -840,17 +899,19 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('\n🚀 Optimized Features:');
   console.log('   ✓ DeepSeek Priority (60s timeout)');
-  console.log('   ✓ Smart Web Crawling');
-  console.log('   ✓ AI-Suggested Sources');
+  console.log('   ✓ Smart Web Crawling with AI-suggested sources');
+  console.log('   ✓ DeepResearch for website suggestions');
   console.log('   ✓ Multi-page Content Analysis');
+  console.log('   ✓ Intelligent fallback system');
   console.log('   ✓ Sequential fallback with all models');
   console.log('\n🔍 Smart Search Pipeline:');
-  console.log('   1. AI suggests best websites');
-  console.log('   2. Search specific sites');
-  console.log('   3. Crawl actual content');
-  console.log('   4. Synthesize with AI');
+  console.log('   1. AI suggests best websites (DeepResearch)');
+  console.log('   2. Search specific sites (DuckDuckGo)');
+  console.log('   3. Crawl actual content (Cheerio)');
+  console.log('   4. Synthesize with AI (DeepSeek)');
+  console.log('   5. Fallback to standard search if needed');
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
-  console.log('\nVersion: 4.0 - Smart Search with Web Crawling');
+  console.log('\nVersion: 4.1 - Enhanced Error Handling & DeepResearch Integration');
   console.log('========================================\n');
 });
 
