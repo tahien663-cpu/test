@@ -392,7 +392,7 @@ export default function Chat() {
     {
       id: 'welcome',
       role: 'ai',
-      content: 'Xin chào! Tôi là **Hein**! 😄',
+      content: 'Xin chào! Tôi là **Hein**! 😄 Chúng tôi đã ngừng hỗ trợ AI này nhưng sẽ còn AI tạo ảnh nhưng sẽ chỉ hỗ trợ tiếng anh và sẽ ko đẹp như trước',
       timestamp: new Date().toISOString()
     }
   ]);
