@@ -291,6 +291,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
       parts: [{ text: msg.content }]
     }));
     
+    // Fix: Use the correct Gemini API endpoint
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL.id}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
@@ -312,6 +313,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     if (!r.ok) {
       const err = await r.text().catch(() => '');
       console.log(`   ❌ ${AI_MODEL.name} failed (${r.status}) in ${dt}ms`);
+      console.log(`   Error details: ${err}`);
       
       if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
         const retrySecs = parseRetryAfter(err);
