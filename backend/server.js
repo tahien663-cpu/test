@@ -14,6 +14,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import * as cheerio from 'cheerio';
 import { LRUCache } from 'lru-cache';
+import { GoogleGenAI } from "@google/genai";
 
 dotenv.config();
 
@@ -45,11 +46,14 @@ const geminiKeys = process.env.GEMINI_API_KEY
 
 const jwtSecret = process.env.JWT_SECRET;
 
-// STRATEGY: Using Gemini 2.0 Flash as primary model for all categories
+// Initialize GoogleGenAI with the first API key
+const genAI = new GoogleGenAI({ apiKey: geminiKeys[0] });
+
+// STRATEGY: Using Gemini 2.5 Flash Lite as primary model for all categories
 const AI_MODEL = {
-  id: 'gemini-2.0-flash',
+  id: 'gemini-2.5-flash-lite',
   timeout: 60000,
-  name: 'Gemini-2.0-Flash'
+  name: 'Gemini-2.5-Flash-Lite'
 };
 
 // Fallback model for when Gemini fails
@@ -235,7 +239,7 @@ function getNextGeminiKey() {
 }
 
 // ==================== AI MODEL CALLING ====================
-// CORE: Using Gemini 2.0 Flash as primary model for all operations with fallback
+// CORE: Using Gemini 2.5 Flash Lite as primary model for all operations with fallback
 async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
   const { temperature = 0.7, maxTokens = 500 } = opts;
   
@@ -279,52 +283,41 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
   if (!apiKey) throw new Error('No Gemini API keys available');
   
   const t0 = Date.now();
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), AI_MODEL.timeout);
   
   try {
     console.log(`🤖 Using ${AI_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
     
-    // Convert messages to Gemini format
-    const geminiMsgs = msgs.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : msg.role,
-      parts: [{ text: msg.content }]
-    }));
+    // Initialize GoogleGenAI with the current API key
+    const genAI = new GoogleGenAI({ apiKey });
     
-    // Fix: Use the correct Gemini API endpoint for 2.0 Flash
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL.id}:generateContent?key=${apiKey}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        contents: geminiMsgs,
-        generationConfig: {
-          temperature: temperature,
-          maxOutputTokens: maxTokens,
-        }
-      }),
-      signal: ctrl.signal
+    // Get the model
+    const model = genAI.getGenerativeModel({ model: AI_MODEL.id });
+    
+    // Convert messages to Gemini format
+    // Combine system and user messages into a single prompt
+    let prompt = '';
+    msgs.forEach(msg => {
+      if (msg.role === 'system') {
+        prompt += `System: ${msg.content}\n\n`;
+      } else if (msg.role === 'user') {
+        prompt += `User: ${msg.content}\n\n`;
+      } else if (msg.role === 'assistant') {
+        prompt += `Assistant: ${msg.content}\n\n`;
+      }
     });
     
-    clearTimeout(to);
+    // Generate content
+    const response = await model.generateContent({
+      contents: prompt,
+      generationConfig: {
+        temperature: temperature,
+        maxOutputTokens: maxTokens,
+      }
+    });
+    
     const dt = Date.now() - t0;
     
-    if (!r.ok) {
-      const err = await r.text().catch(() => '');
-      console.log(`   ❌ ${AI_MODEL.name} failed (${r.status}) in ${dt}ms`);
-      console.log(`   Error details: ${err}`);
-      
-      if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
-        const retrySecs = parseRetryAfter(err);
-        markModelRateLimited(AI_MODEL.id, retrySecs);
-      }
-      
-      throw new Error(`Gemini failed with status ${r.status}`);
-    }
-    
-    const data = await r.json();
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    const content = response.response.text();
     
     if (!content) {
       console.log(`   ❌ ${AI_MODEL.name} returned empty content`);
@@ -337,16 +330,16 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     return { content, modelId: AI_MODEL.id, modelName: AI_MODEL.name, responseTime: dt };
     
   } catch (e) {
-    clearTimeout(to);
     const dt = Date.now() - t0;
     
-    if (e.name === 'AbortError') {
-      console.log(`   ⏱️  ${AI_MODEL.name} timeout after ${dt}ms`);
-      throw new Error('Gemini request timed out');
-    } else {
-      console.log(`   ❌ ${AI_MODEL.name} error: ${e.message}`);
-      throw e;
+    console.log(`   ❌ ${AI_MODEL.name} error: ${e.message}`);
+    
+    if (e.message.includes('quota') || e.message.includes('rate limit')) {
+      const retrySecs = parseRetryAfter(e.message);
+      markModelRateLimited(AI_MODEL.id, retrySecs);
     }
+    
+    throw new Error(`Gemini failed: ${e.message}`);
   }
 }
 
@@ -1399,7 +1392,7 @@ app.get('/', (req, res) => {
     strategy: 'Multi-API with Comma-Separated Keys & Enhanced Caching', 
     features: [
       'Comma-separated API keys for both Gemini and OpenRouter',
-      'Gemini-2.0-Flash as primary model',
+      'Gemini-2.5-Flash-Lite as primary model',
       'GLM-4.5-Air as fallback model',
       'Improved DuckDuckGo search',
       'Enhanced Image Generation with caching',
@@ -1787,7 +1780,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('\n🚀 MULTI-API v5.1 - OPTIMIZED');
   console.log('   ✓ Comma-separated API keys for both Gemini and OpenRouter');
-  console.log('   ✓ Gemini-2.0-Flash as primary model (15 RPM, 1M TPM)');
+  console.log('   ✓ Gemini-2.5-Flash-Lite as primary model using GoogleGenAI SDK');
   console.log('   ✓ GLM-4.5-Air as fallback model');
   console.log('   ✓ Improved DuckDuckGo search with multiple sources');
   console.log('   ✓ Enhanced image generation with caching');
@@ -1811,7 +1804,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   • Image caching for performance');
   console.log('   • Multiple API fallbacks');
   console.log('\n📊 Models:');
-  console.log(`   Primary: ${AI_MODEL.name} (15 RPM, 1M TPM, 200 RPD)`);
+  console.log(`   Primary: ${AI_MODEL.name} (10 RPM, 250K TPM, 250 RPD)`);
   console.log(`   Fallback: ${FALLBACK_MODEL.name}`);
   console.log(`   Gemini Keys: ${geminiKeys.length}`);
   console.log(`   OpenRouter Keys: ${openRouterKeys.length}`);
