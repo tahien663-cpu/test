@@ -22,12 +22,26 @@ hideScrollbarStyle.textContent = `
       padding-bottom: env(safe-area-inset-bottom, 0px);
     }
   }
+  .markdown-content pre {
+    position: relative;
+  }
+  .markdown-content img {
+    max-width: 100%;
+    height: auto;
+  }
 `;
 document.head.appendChild(hideScrollbarStyle);
 
 // ==================== UTILITIES ====================
+// Tối ưu hóa hàm parseMarkdown với cache
+const markdownCache = new Map();
 const parseMarkdown = (text) => {
   if (!text || typeof text !== 'string') return '';
+  
+  // Kiểm tra cache
+  if (markdownCache.has(text)) {
+    return markdownCache.get(text);
+  }
   
   try {
     let html = text
@@ -36,7 +50,8 @@ const parseMarkdown = (text) => {
       .replace(/>/g, '&gt;')
       .replace(/```(\w+)?\n?([\s\S]*?)```/g, (match, lang, code) => {
         const langClass = lang ? ` language-${lang}` : '';
-        return `<div class="my-3 relative group"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-xl overflow-x-auto text-sm"><code class="${langClass} text-gray-900 dark:text-gray-100">${code.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code></pre><button class="copy-btn absolute top-2 right-2 md:opacity-0 md:group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all shadow-md" data-code="${code.trim().replace(/"/g, '&quot;')}" aria-label="Copy code"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg></button></div>`;
+        const sanitizedCode = code.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `<div class="my-3 relative group"><pre class="bg-gray-100 dark:bg-gray-800 p-4 rounded-xl overflow-x-auto text-sm"><code class="${langClass} text-gray-900 dark:text-gray-100">${sanitizedCode}</code></pre><button class="copy-btn absolute top-2 right-2 md:opacity-0 md:group-hover:opacity-100 p-2 bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 rounded-lg transition-all shadow-md" data-code="${sanitizedCode.trim().replace(/"/g, '&quot;')}" aria-label="Copy code"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg></button></div>`;
       })
       .replace(/`([^`]+)`/g, '<code class="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-sm font-mono text-gray-900 dark:text-gray-100">$1</code>')
       .replace(/\*\*(.+?)\*\*/g, '<strong class="font-bold">$1</strong>')
@@ -55,10 +70,20 @@ const parseMarkdown = (text) => {
       .replace(/^[-*]\s+(.*)$/gm, '<li class="ml-4 list-disc text-gray-900 dark:text-white">$1</li>')
       .replace(/^\d+\.\s+(.*)$/gm, '<li class="ml-4 list-decimal text-gray-900 dark:text-white">$1</li>');
 
-    return DOMPurify.sanitize(html, { 
+    const sanitizedHtml = DOMPurify.sanitize(html, { 
       ALLOWED_TAGS: ['strong', 'em', 'del', 'a', 'code', 'pre', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'br', 'p', 'div', 'img'],
       ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'src', 'alt', 'data-code', 'data-image-url', 'loading', 'aria-label']
     });
+    
+    // Lưu vào cache
+    if (markdownCache.size > 100) {
+      // Giới hạn kích thước cache
+      const firstKey = markdownCache.keys().next().value;
+      markdownCache.delete(firstKey);
+    }
+    markdownCache.set(text, sanitizedHtml);
+    
+    return sanitizedHtml;
   } catch (err) {
     console.error('Markdown parse error:', err);
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -88,6 +113,8 @@ const formatDate = (timestamp) => {
 const MessageBubble = ({ msg, userName, onDelete, theme }) => {
   const isUser = msg.role === 'user';
   const contentRef = useRef(null);
+  const [isImageLoading, setIsImageLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
   
   useEffect(() => {
     if (!contentRef.current) return;
@@ -112,8 +139,15 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
       if (e.target.closest('.download-btn')) {
         const btn = e.target.closest('.download-btn');
         const url = btn.closest('[data-image-url]').getAttribute('data-image-url');
-        fetch(url, { mode: 'cors' })
+        setIsImageLoading(true);
+        
+        // Cải thiện việc tải ảnh bằng cách sử dụng fetch với timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30s timeout
+        
+        fetch(url, { mode: 'cors', signal: controller.signal })
           .then(response => {
+            clearTimeout(timeoutId);
             if (!response.ok) throw new Error('Không thể tải ảnh');
             return response.blob();
           })
@@ -121,8 +155,11 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
             link.download = `hein-ai-image-${Date.now()}.png`;
+            document.body.appendChild(link);
             link.click();
+            document.body.removeChild(link);
             URL.revokeObjectURL(link.href);
+            
             const originalHTML = btn.innerHTML;
             btn.innerHTML = '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>';
             setTimeout(() => {
@@ -130,14 +167,20 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
             }, 2000);
           })
           .catch(err => {
+            clearTimeout(timeoutId);
             console.error('Download error:', err);
-            alert('Không thể tải ảnh: ' + err.message);
+            setImageError(true);
+            setTimeout(() => setImageError(false), 3000);
+          })
+          .finally(() => {
+            setIsImageLoading(false);
           });
       }
     };
     
     contentRef.current.addEventListener('click', handleCopy);
     contentRef.current.addEventListener('click', handleDownload);
+    
     return () => {
       contentRef.current?.removeEventListener('click', handleCopy);
       contentRef.current?.removeEventListener('click', handleDownload);
@@ -147,6 +190,7 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
   useEffect(() => {
     if (!contentRef.current) return;
     const imageDivs = contentRef.current.querySelectorAll('[data-image-url]');
+    
     imageDivs.forEach(div => {
       if (!div.querySelector('.download-btn')) {
         const button = document.createElement('button');
@@ -178,9 +222,18 @@ const MessageBubble = ({ msg, userName, onDelete, theme }) => {
         } shadow-md`}>
           <div 
             ref={contentRef}
-            className="text-sm md:text-[15px] leading-relaxed prose prose-sm dark:prose-invert max-w-none"
+            className="text-sm md:text-[15px] leading-relaxed prose prose-sm dark:prose-invert max-w-none markdown-content"
             dangerouslySetInnerHTML={{ __html: parseMarkdown(msg.content) }}
           />
+          {imageError && (
+            <div className="text-red-500 text-sm mt-2">Không thể tải ảnh. Vui lòng thử lại.</div>
+          )}
+          {isImageLoading && (
+            <div className="flex items-center gap-2 mt-2">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              <span className="text-sm">Đang tải ảnh...</span>
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2 mt-1.5 px-1">
           <span className={`text-xs ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>
@@ -408,11 +461,13 @@ export default function Chat() {
   const [userName, setUserName] = useState(() => localStorage.getItem('userName') || 'Bạn');
   const [chatHistory, setChatHistory] = useState([]);
   const [error, setError] = useState(null);
+  const [isTyping, setIsTyping] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const abortControllerRef = useRef(null);
   const messagesContainerRef = useRef(null);
   const isLoadingHistoryRef = useRef(false);
+  const typingTimeoutRef = useRef(null);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -428,6 +483,9 @@ export default function Chat() {
     return () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
       }
     };
   }, []);
@@ -692,6 +750,15 @@ export default function Chat() {
     setInput(e.target.value);
     e.target.style.height = 'auto';
     e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
+    
+    // Xử lý trạng thái đang gõ
+    setIsTyping(true);
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+    }, 1000);
   }, []);
 
   const filteredHistory = useMemo(() => {
@@ -709,6 +776,17 @@ export default function Chat() {
     loadChat(chatId);
     setSidebarOpen(false);
   }, [loadChat]);
+
+  // Tối ưu hóa việc cuộn khi có tin nhắn mới
+  useEffect(() => {
+    if (messagesContainerRef.current) {
+      const { scrollHeight, clientHeight, scrollTop } = messagesContainerRef.current;
+      // Chỉ tự động cuộn nếu người dùng đang ở gần cuối
+      if (scrollHeight - (scrollTop + clientHeight) < 100) {
+        scrollToBottom();
+      }
+    }
+  }, [messages, scrollToBottom]);
 
   return (
     <div className={`h-screen flex ${theme === 'dark' ? 'bg-gray-900' : 'bg-white'} transition-colors duration-300`}>
