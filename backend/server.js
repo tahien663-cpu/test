@@ -45,18 +45,18 @@ const geminiKeys = process.env.GEMINI_API_KEY
 
 const jwtSecret = process.env.JWT_SECRET;
 
-// STRATEGY: Using single model for all categories
+// STRATEGY: Using Gemini as primary model for all categories
 const AI_MODEL = {
-  id: 'z-ai/glm-4.5-air:free',
-  timeout: 60000,
-  name: 'GLM-4.5-Air'
-};
-
-// Fallback model for when OpenRouter fails
-const FALLBACK_MODEL = {
   id: 'gemini-1.5-flash',
   timeout: 60000,
   name: 'Gemini-1.5-Flash'
+};
+
+// Fallback model for when Gemini fails
+const FALLBACK_MODEL = {
+  id: 'z-ai/glm-4.5-air:free',
+  timeout: 60000,
+  name: 'GLM-4.5-Air'
 };
 
 // Image generation models configuration
@@ -235,24 +235,24 @@ function getNextGeminiKey() {
 }
 
 // ==================== AI MODEL CALLING ====================
-// CORE: Using single model for all operations with fallback
+// CORE: Using Gemini as primary model for all operations with fallback
 async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
   const { temperature = 0.7, maxTokens = 500 } = opts;
   
-  // Try OpenRouter first
+  // Try Gemini first
   if (!isModelRateLimited(AI_MODEL.id)) {
     try {
-      return await callOpenRouterModel(msgs, temperature, maxTokens);
+      return await callGeminiModel(msgs, temperature, maxTokens);
     } catch (e) {
-      console.log(`OpenRouter failed: ${e.message}`);
+      console.log(`Gemini failed: ${e.message}`);
       updateModelStats(AI_MODEL.id, false);
       
-      // If OpenRouter fails, try Gemini
+      // If Gemini fails, try OpenRouter
       if (!isModelRateLimited(FALLBACK_MODEL.id)) {
         try {
-          return await callGeminiModel(msgs, temperature, maxTokens);
+          return await callOpenRouterModel(msgs, temperature, maxTokens);
         } catch (e2) {
-          console.log(`Gemini failed: ${e2.message}`);
+          console.log(`OpenRouter failed: ${e2.message}`);
           updateModelStats(FALLBACK_MODEL.id, false);
           throw new Error('All AI models failed');
         }
@@ -261,81 +261,16 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
       }
     }
   } else if (!isModelRateLimited(FALLBACK_MODEL.id)) {
-    // OpenRouter is rate limited, try Gemini
+    // Gemini is rate limited, try OpenRouter
     try {
-      return await callGeminiModel(msgs, temperature, maxTokens);
+      return await callOpenRouterModel(msgs, temperature, maxTokens);
     } catch (e) {
-      console.log(`Gemini failed: ${e.message}`);
+      console.log(`OpenRouter failed: ${e.message}`);
       updateModelStats(FALLBACK_MODEL.id, false);
       throw new Error('All AI models failed');
     }
   } else {
     throw new Error('All AI models are rate limited');
-  }
-}
-
-async function callOpenRouterModel(msgs, temperature, maxTokens) {
-  const apiKey = getNextOpenRouterKey();
-  if (!apiKey) throw new Error('No OpenRouter API keys available');
-  
-  const t0 = Date.now();
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), AI_MODEL.timeout);
-  
-  try {
-    console.log(`🤖 Using ${AI_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
-    
-    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://hein1.onrender.com',
-        'X-Title': 'Hein AI'
-      },
-      body: JSON.stringify({ model: AI_MODEL.id, messages: msgs, temperature, max_tokens: maxTokens }),
-      signal: ctrl.signal
-    });
-    
-    clearTimeout(to);
-    const dt = Date.now() - t0;
-    
-    if (!r.ok) {
-      const err = await r.text().catch(() => '');
-      console.log(`   ❌ ${AI_MODEL.name} failed (${r.status}) in ${dt}ms`);
-      
-      if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
-        const retrySecs = parseRetryAfter(err);
-        markModelRateLimited(AI_MODEL.id, retrySecs);
-      }
-      
-      throw new Error(`OpenRouter failed with status ${r.status}`);
-    }
-    
-    const data = await r.json();
-    const content = data.choices?.[0]?.message?.content;
-    
-    if (!content) {
-      console.log(`   ❌ ${AI_MODEL.name} returned empty content`);
-      throw new Error('OpenRouter returned empty content');
-    }
-    
-    console.log(`   ✅ ${AI_MODEL.name} succeeded in ${dt}ms`);
-    updateModelStats(AI_MODEL.id, true);
-    
-    return { content, modelId: AI_MODEL.id, modelName: AI_MODEL.name, responseTime: dt };
-    
-  } catch (e) {
-    clearTimeout(to);
-    const dt = Date.now() - t0;
-    
-    if (e.name === 'AbortError') {
-      console.log(`   ⏱️  ${AI_MODEL.name} timeout after ${dt}ms`);
-      throw new Error('OpenRouter request timed out');
-    } else {
-      console.log(`   ❌ ${AI_MODEL.name} error: ${e.message}`);
-      throw e;
-    }
   }
 }
 
@@ -345,10 +280,10 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
   
   const t0 = Date.now();
   const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), FALLBACK_MODEL.timeout);
+  const to = setTimeout(() => ctrl.abort(), AI_MODEL.timeout);
   
   try {
-    console.log(`🤖 Using ${FALLBACK_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
+    console.log(`🤖 Using ${AI_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
     
     // Convert messages to Gemini format
     const geminiMsgs = msgs.map(msg => ({
@@ -356,7 +291,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
       parts: [{ text: msg.content }]
     }));
     
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL.id}:generateContent?key=${apiKey}`, {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL.id}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -376,11 +311,11 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     
     if (!r.ok) {
       const err = await r.text().catch(() => '');
-      console.log(`   ❌ ${FALLBACK_MODEL.name} failed (${r.status}) in ${dt}ms`);
+      console.log(`   ❌ ${AI_MODEL.name} failed (${r.status}) in ${dt}ms`);
       
       if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
         const retrySecs = parseRetryAfter(err);
-        markModelRateLimited(FALLBACK_MODEL.id, retrySecs);
+        markModelRateLimited(AI_MODEL.id, retrySecs);
       }
       
       throw new Error(`Gemini failed with status ${r.status}`);
@@ -390,8 +325,73 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
     
     if (!content) {
-      console.log(`   ❌ ${FALLBACK_MODEL.name} returned empty content`);
+      console.log(`   ❌ ${AI_MODEL.name} returned empty content`);
       throw new Error('Gemini returned empty content');
+    }
+    
+    console.log(`   ✅ ${AI_MODEL.name} succeeded in ${dt}ms`);
+    updateModelStats(AI_MODEL.id, true);
+    
+    return { content, modelId: AI_MODEL.id, modelName: AI_MODEL.name, responseTime: dt };
+    
+  } catch (e) {
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (e.name === 'AbortError') {
+      console.log(`   ⏱️  ${AI_MODEL.name} timeout after ${dt}ms`);
+      throw new Error('Gemini request timed out');
+    } else {
+      console.log(`   ❌ ${AI_MODEL.name} error: ${e.message}`);
+      throw e;
+    }
+  }
+}
+
+async function callOpenRouterModel(msgs, temperature, maxTokens) {
+  const apiKey = getNextOpenRouterKey();
+  if (!apiKey) throw new Error('No OpenRouter API keys available');
+  
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), FALLBACK_MODEL.timeout);
+  
+  try {
+    console.log(`🤖 Using ${FALLBACK_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
+    
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({ model: FALLBACK_MODEL.id, messages: msgs, temperature, max_tokens: maxTokens }),
+      signal: ctrl.signal
+    });
+    
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (!r.ok) {
+      const err = await r.text().catch(() => '');
+      console.log(`   ❌ ${FALLBACK_MODEL.name} failed (${r.status}) in ${dt}ms`);
+      
+      if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
+        const retrySecs = parseRetryAfter(err);
+        markModelRateLimited(FALLBACK_MODEL.id, retrySecs);
+      }
+      
+      throw new Error(`OpenRouter failed with status ${r.status}`);
+    }
+    
+    const data = await r.json();
+    const content = data.choices?.[0]?.message?.content;
+    
+    if (!content) {
+      console.log(`   ❌ ${FALLBACK_MODEL.name} returned empty content`);
+      throw new Error('OpenRouter returned empty content');
     }
     
     console.log(`   ✅ ${FALLBACK_MODEL.name} succeeded in ${dt}ms`);
@@ -405,7 +405,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     
     if (e.name === 'AbortError') {
       console.log(`   ⏱️  ${FALLBACK_MODEL.name} timeout after ${dt}ms`);
-      throw new Error('Gemini request timed out');
+      throw new Error('OpenRouter request timed out');
     } else {
       console.log(`   ❌ ${FALLBACK_MODEL.name} error: ${e.message}`);
       throw e;
@@ -1390,8 +1390,9 @@ app.get('/', (req, res) => {
     version: '5.1', 
     strategy: 'Multi-API with Comma-Separated Keys & Enhanced Caching', 
     features: [
-      'Comma-separated API keys for both OpenRouter and Gemini',
-      'Gemini-1.5-Flash fallback model',
+      'Comma-separated API keys for both Gemini and OpenRouter',
+      'Gemini-1.5-Flash as primary model',
+      'GLM-4.5-Air as fallback model',
       'Improved DuckDuckGo search',
       'Enhanced Image Generation with caching',
       'LRU caching for better performance',
@@ -1423,9 +1424,9 @@ app.get('/api/model-stats', (req, res) => {
   }
   res.json({ 
     stats, 
-    strategy: 'Comma-separated API keys for both OpenRouter and Gemini',
-    openRouterKeys: openRouterKeys.length,
+    strategy: 'Comma-separated API keys for both Gemini and OpenRouter',
     geminiKeys: geminiKeys.length,
+    openRouterKeys: openRouterKeys.length,
     imageCacheSize: imageCache.size,
     searchCacheSize: searchCache.size,
     promptCacheSize: promptCache.size,
@@ -1777,8 +1778,9 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('\n🚀 MULTI-API v5.1 - OPTIMIZED');
-  console.log('   ✓ Comma-separated API keys for both OpenRouter and Gemini');
-  console.log('   ✓ Gemini-1.5-Flash fallback model');
+  console.log('   ✓ Comma-separated API keys for both Gemini and OpenRouter');
+  console.log('   ✓ Gemini-1.5-Flash as primary model');
+  console.log('   ✓ GLM-4.5-Air as fallback model');
   console.log('   ✓ Improved DuckDuckGo search with multiple sources');
   console.log('   ✓ Enhanced image generation with caching');
   console.log('   ✓ LRU caching for better performance');
@@ -1803,8 +1805,8 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('\n📊 Models:');
   console.log(`   Primary: ${AI_MODEL.name}`);
   console.log(`   Fallback: ${FALLBACK_MODEL.name}`);
-  console.log(`   OpenRouter Keys: ${openRouterKeys.length}`);
   console.log(`   Gemini Keys: ${geminiKeys.length}`);
+  console.log(`   OpenRouter Keys: ${openRouterKeys.length}`);
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
   console.log('========================================\n');
 });
