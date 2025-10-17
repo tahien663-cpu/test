@@ -30,7 +30,18 @@ for (const envVar of requiredEnvVars) {
 
 const app = express();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const openRouterKey = process.env.OPENROUTER_API_KEY;
+
+// Multiple API keys for OpenRouter
+const openRouterKeys = [
+  process.env.OPENROUTER_API_KEY,
+  process.env.OPENROUTER_API_KEY_2,
+  process.env.OPENROUTER_API_KEY_3,
+  process.env.OPENROUTER_API_KEY_4,
+  process.env.OPENROUTER_API_KEY_5
+].filter(key => key); // Filter out undefined keys
+
+const googleApiKey = process.env.GOOGLE_API_KEY;
+const googleSearchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
 const jwtSecret = process.env.JWT_SECRET;
 
 // STRATEGY: Using single model for all categories
@@ -40,13 +51,24 @@ const AI_MODEL = {
   name: 'GLM-4.5-Air'
 };
 
+// Fallback model for when OpenRouter fails
+const FALLBACK_MODEL = {
+  id: 'google/gemini-1.5-flash',
+  timeout: 60000,
+  name: 'Gemini-1.5-Flash'
+};
+
 // ==================== MODEL MANAGEMENT ====================
 const modelStats = new Map();
 const rateLimitTracker = new Map();
+const currentApiKeyIndex = { value: 0 };
 
 function initModelStats() {
   modelStats.set(AI_MODEL.id, { successCount: 0, failCount: 0, lastUsed: null, rateLimitCount: 0 });
+  modelStats.set(FALLBACK_MODEL.id, { successCount: 0, failCount: 0, lastUsed: null, rateLimitCount: 0 });
+  
   rateLimitTracker.set(AI_MODEL.id, { isRateLimited: false, rateLimitUntil: null });
+  rateLimitTracker.set(FALLBACK_MODEL.id, { isRateLimited: false, rateLimitUntil: null });
 }
 initModelStats();
 
@@ -87,27 +109,68 @@ function updateModelStats(id, ok) {
   modelStats.set(id, s);
 }
 
+function getNextApiKey() {
+  if (openRouterKeys.length === 0) return null;
+  const key = openRouterKeys[currentApiKeyIndex.value];
+  currentApiKeyIndex.value = (currentApiKeyIndex.value + 1) % openRouterKeys.length;
+  return key;
+}
+
 // ==================== AI MODEL CALLING ====================
-// CORE: Using single model for all operations
+// CORE: Using single model for all operations with fallback
 async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
   const { temperature = 0.7, maxTokens = 500 } = opts;
   
-  if (isModelRateLimited(AI_MODEL.id)) {
-    console.log(`⏭️  Skip ${AI_MODEL.name} (rate limited)`);
-    throw new Error('Model is rate limited');
+  // Try OpenRouter first
+  if (!isModelRateLimited(AI_MODEL.id)) {
+    try {
+      return await callOpenRouterModel(msgs, temperature, maxTokens);
+    } catch (e) {
+      console.log(`OpenRouter failed: ${e.message}`);
+      updateModelStats(AI_MODEL.id, false);
+      
+      // If OpenRouter fails, try Gemini
+      if (!isModelRateLimited(FALLBACK_MODEL.id)) {
+        try {
+          return await callGeminiModel(msgs, temperature, maxTokens);
+        } catch (e2) {
+          console.log(`Gemini failed: ${e2.message}`);
+          updateModelStats(FALLBACK_MODEL.id, false);
+          throw new Error('All AI models failed');
+        }
+      } else {
+        throw new Error('All AI models are rate limited');
+      }
+    }
+  } else if (!isModelRateLimited(FALLBACK_MODEL.id)) {
+    // OpenRouter is rate limited, try Gemini
+    try {
+      return await callGeminiModel(msgs, temperature, maxTokens);
+    } catch (e) {
+      console.log(`Gemini failed: ${e.message}`);
+      updateModelStats(FALLBACK_MODEL.id, false);
+      throw new Error('All AI models failed');
+    }
+  } else {
+    throw new Error('All AI models are rate limited');
   }
+}
+
+async function callOpenRouterModel(msgs, temperature, maxTokens) {
+  const apiKey = getNextApiKey();
+  if (!apiKey) throw new Error('No OpenRouter API keys available');
   
   const t0 = Date.now();
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), AI_MODEL.timeout);
   
   try {
-    console.log(`🤖 Using ${AI_MODEL.name}... (timeout: ${AI_MODEL.timeout/1000}s)`);
+    console.log(`🤖 Using ${AI_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
     
     const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${openRouterKey}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
         'HTTP-Referer': 'https://hein1.onrender.com',
         'X-Title': 'Hein AI'
@@ -128,8 +191,7 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
         markModelRateLimited(AI_MODEL.id, retrySecs);
       }
       
-      updateModelStats(AI_MODEL.id, false);
-      throw new Error(`Model failed with status ${r.status}`);
+      throw new Error(`OpenRouter failed with status ${r.status}`);
     }
     
     const data = await r.json();
@@ -137,8 +199,7 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
     
     if (!content) {
       console.log(`   ❌ ${AI_MODEL.name} returned empty content`);
-      updateModelStats(AI_MODEL.id, false);
-      throw new Error('Model returned empty content');
+      throw new Error('OpenRouter returned empty content');
     }
     
     console.log(`   ✅ ${AI_MODEL.name} succeeded in ${dt}ms`);
@@ -152,9 +213,80 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
     
     if (e.name === 'AbortError') {
       console.log(`   ⏱️  ${AI_MODEL.name} timeout after ${dt}ms`);
-      throw new Error('Model request timed out');
+      throw new Error('OpenRouter request timed out');
     } else {
       console.log(`   ❌ ${AI_MODEL.name} error: ${e.message}`);
+      throw e;
+    }
+  }
+}
+
+async function callGeminiModel(msgs, temperature, maxTokens) {
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), FALLBACK_MODEL.timeout);
+  
+  try {
+    console.log(`🤖 Using ${FALLBACK_MODEL.name} as fallback...`);
+    
+    // Convert messages to Gemini format
+    const geminiMsgs = msgs.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : msg.role,
+      parts: [{ text: msg.content }]
+    }));
+    
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL.id}:generateContent?key=${googleApiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        contents: geminiMsgs,
+        generationConfig: {
+          temperature: temperature,
+          maxOutputTokens: maxTokens,
+        }
+      }),
+      signal: ctrl.signal
+    });
+    
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (!r.ok) {
+      const err = await r.text().catch(() => '');
+      console.log(`   ❌ ${FALLBACK_MODEL.name} failed (${r.status}) in ${dt}ms`);
+      
+      if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
+        const retrySecs = parseRetryAfter(err);
+        markModelRateLimited(FALLBACK_MODEL.id, retrySecs);
+      }
+      
+      throw new Error(`Gemini failed with status ${r.status}`);
+    }
+    
+    const data = await r.json();
+    const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    
+    if (!content) {
+      console.log(`   ❌ ${FALLBACK_MODEL.name} returned empty content`);
+      throw new Error('Gemini returned empty content');
+    }
+    
+    console.log(`   ✅ ${FALLBACK_MODEL.name} succeeded in ${dt}ms`);
+    updateModelStats(FALLBACK_MODEL.id, true);
+    
+    return { content, modelId: FALLBACK_MODEL.id, modelName: FALLBACK_MODEL.name, responseTime: dt };
+    
+  } catch (e) {
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (e.name === 'AbortError') {
+      console.log(`   ⏱️  ${FALLBACK_MODEL.name} timeout after ${dt}ms`);
+      throw new Error('Gemini request timed out');
+    } else {
+      console.log(`   ❌ ${FALLBACK_MODEL.name} error: ${e.message}`);
       throw e;
     }
   }
@@ -407,6 +539,148 @@ Return JSON: ["url1", "url2", ...]`;
   }
 }
 
+// ==================== IMPROVED SEARCH FUNCTIONS ====================
+async function searchDuckDuckGo(query) {
+  try {
+    const eq = encodeURIComponent(query);
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10000);
+    
+    const r = await fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1&skip_disambig=1`, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    
+    clearTimeout(to);
+    
+    if (!r.ok) {
+      console.log(`   ❌ DuckDuckGo search failed: ${r.status}`);
+      return [];
+    }
+    
+    const data = await r.json();
+    const results = [];
+    
+    // Add abstract if available
+    if (data.Abstract) {
+      results.push({
+        title: data.Heading || 'Answer',
+        snippet: data.Abstract,
+        link: data.AbstractURL || '',
+        source: 'DuckDuckGo',
+        priority: 10
+      });
+    }
+    
+    // Add related topics
+    if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
+      data.RelatedTopics.slice(0, 5).forEach(t => {
+        if (t.Text && t.FirstURL) {
+          const domain = new URL(t.FirstURL).hostname.replace('www.', '');
+          results.push({
+            title: t.Text.split(' - ')[0],
+            snippet: t.Text,
+            link: t.FirstURL,
+            source: domain,
+            priority: 8
+          });
+        }
+      });
+    }
+    
+    return results;
+  } catch (e) {
+    console.error('   Error in DuckDuckGo search:', e.message);
+    return [];
+  }
+}
+
+async function searchGoogle(query) {
+  if (!googleApiKey || !googleSearchEngineId) {
+    console.log('   ⚠️ Google API keys not configured, skipping Google search');
+    return [];
+  }
+  
+  try {
+    const eq = encodeURIComponent(query);
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 10000);
+    
+    const r = await fetch(`https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${googleSearchEngineId}&q=${eq}&num=5`, {
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    
+    clearTimeout(to);
+    
+    if (!r.ok) {
+      console.log(`   ❌ Google search failed: ${r.status}`);
+      return [];
+    }
+    
+    const data = await r.json();
+    const results = [];
+    
+    if (data.items && Array.isArray(data.items)) {
+      data.items.forEach(item => {
+        const domain = new URL(item.link).hostname.replace('www.', '');
+        results.push({
+          title: item.title,
+          snippet: item.snippet,
+          link: item.link,
+          source: domain,
+          priority: 9
+        });
+      });
+    }
+    
+    return results;
+  } catch (e) {
+    console.error('   Error in Google search:', e.message);
+    return [];
+  }
+}
+
+async function searchWikipedia(query) {
+  try {
+    const eq = encodeURIComponent(query);
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 8000);
+    
+    const r = await fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${eq}&format=json&srlimit=3&origin=*`, { 
+      signal: ctrl.signal,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+    });
+    
+    clearTimeout(to);
+    
+    if (!r.ok) {
+      console.log(`   ❌ Wikipedia search failed: ${r.status}`);
+      return [];
+    }
+    
+    const data = await r.json();
+    const results = [];
+    
+    if (data.query && data.query.search && Array.isArray(data.query.search)) {
+      data.query.search.forEach(item => {
+        results.push({
+          title: item.title,
+          snippet: item.snippet.replace(/<[^>]*>/g, ''),
+          link: `https://en.wikipedia.org/wiki/${encodeURIComponent(item.title.replace(/ /g, '_'))}`,
+          source: 'wikipedia.org',
+          priority: 7
+        });
+      });
+    }
+    
+    return results;
+  } catch (e) {
+    console.error('   Error in Wikipedia search:', e.message);
+    return [];
+  }
+}
+
 async function searchSpecificSites(query, sites) {
   const results = [];
   let productModel = '';
@@ -546,92 +820,68 @@ async function smartSearch(query) {
     const suggestedSites = await suggestWebsites(query);
     console.log(`   Found ${suggestedSites.length} sites`);
     
-    if (suggestedSites.length === 0) return await searchWebFallback(query);
+    console.log('🔎 Step 2: Searching multiple sources...');
     
-    console.log('🔎 Step 2: Searching sites...');
-    const searchResults = await searchSpecificSites(query, suggestedSites);
-    console.log(`   Found ${searchResults.length} results`);
+    // Search from multiple sources in parallel
+    const searchPromises = [
+      searchDuckDuckGo(query),
+      searchGoogle(query),
+      searchWikipedia(query),
+      searchSpecificSites(query, suggestedSites)
+    ];
     
-    console.log('📥 Step 3: Crawling...');
-    let topUrls = [...new Set(searchResults.map(r => r.link))].slice(0, 5);
+    const searchResults = await Promise.allSettled(searchPromises);
+    const allResults = [];
+    
+    searchResults.forEach((result, index) => {
+      if (result.status === 'fulfilled' && Array.isArray(result.value)) {
+        console.log(`   Source ${index + 1}: ${result.value.length} results`);
+        allResults.push(...result.value);
+      } else {
+        console.log(`   Source ${index + 1}: Failed`);
+      }
+    });
+    
+    // Remove duplicates based on URL
+    const uniqueResults = [];
+    const seenUrls = new Set();
+    
+    allResults.forEach(result => {
+      if (result.link && !seenUrls.has(result.link)) {
+        seenUrls.add(result.link);
+        uniqueResults.push(result);
+      }
+    });
+    
+    // Sort by priority
+    uniqueResults.sort((a, b) => b.priority - a.priority);
+    
+    console.log(`   Total unique results: ${uniqueResults.length}`);
+    
+    console.log('📥 Step 3: Crawling top pages...');
+    let topUrls = uniqueResults.slice(0, 5).map(r => r.link).filter(Boolean);
     
     if (topUrls.length === 0) {
       console.log('   No results, crawling suggested sites');
       topUrls = suggestedSites.slice(0, 5);
     }
     
-    if (topUrls.length === 0) return await searchWebFallback(query);
+    if (topUrls.length === 0) return { query, queryType, suggestedSites, searchResults: [], crawledData: [], totalSources: 0 };
     
     const crawlPromises = topUrls.map(url => crawlWebpage(url));
     const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
     console.log(`   Crawled ${crawledData.length}/${topUrls.length} pages`);
     
-    if (crawledData.length > 0 || searchResults.length > 0) {
-      return {
-        query,
-        queryType,
-        suggestedSites,
-        searchResults,
-        crawledData,
-        totalSources: crawledData.length + searchResults.length
-      };
-    }
-    
-    return await searchWebFallback(query);
+    return {
+      query,
+      queryType,
+      suggestedSites,
+      searchResults: uniqueResults,
+      crawledData,
+      totalSources: crawledData.length + uniqueResults.length
+    };
   } catch (e) {
     console.error('   Error:', e.message);
-    return await searchWebFallback(query);
-  }
-}
-
-async function searchWebFallback(query) {
-  const ctrl = new AbortController();
-  const to = setTimeout(() => ctrl.abort(), 20000);
-  
-  try {
-    const eq = encodeURIComponent(query);
-    
-    const searches = [
-      fetch(`https://api.duckduckgo.com/?q=${eq}&format=json&no_html=1`, {
-        signal: ctrl.signal,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      })
-        .then(r => r.json())
-        .then(d => {
-          const res = [];
-          if (d.Abstract) res.push({ title: d.Heading || 'Answer', snippet: d.Abstract, link: d.AbstractURL || '', source: 'DuckDuckGo', priority: 10 });
-          if (d.RelatedTopics) {
-            d.RelatedTopics.slice(0, 5).forEach(t => {
-              if (t.Text && t.FirstURL) {
-                const dom = new URL(t.FirstURL).hostname;
-                res.push({ title: t.Text.split(' - ')[0], snippet: t.Text, link: t.FirstURL, source: dom, priority: 5 });
-              }
-            });
-          }
-          return res;
-        })
-        .catch(() => []),
-      
-      fetch(`https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${eq}&format=json&srlimit=3&origin=*`, { signal: ctrl.signal })
-        .then(r => r.json())
-        .then(d => (d.query?.search || []).map(i => ({
-          title: i.title,
-          snippet: i.snippet.replace(/<[^>]*>/g, ''),
-          link: `https://en.wikipedia.org/wiki/${encodeURIComponent(i.title.replace(/ /g, '_'))}`,
-          source: 'wikipedia.org',
-          priority: 9
-        })))
-        .catch(() => [])
-    ];
-
-    const settled = await Promise.allSettled(searches.map(p => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 8000))])));
-    const res = settled.filter(r => r.status === 'fulfilled' && Array.isArray(r.value)).flatMap(r => r.value);
-    
-    clearTimeout(to);
-    
-    return { query, queryType: 'general', suggestedSites: [], searchResults: res, crawledData: [], totalSources: res.length };
-  } catch {
-    clearTimeout(to);
     return { query, queryType: 'general', suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
   }
 }
@@ -837,7 +1087,18 @@ function authenticateToken(req, res, next) {
 
 // ==================== ROUTES ====================
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', version: '4.6', strategy: 'Single Model', features: ['Single GLM-4.5-Air Model', 'Improved Detection', 'No False Positives', 'Product Detection', 'Real-time Queries', 'Enhanced Image Generation'] });
+  res.json({ 
+    status: 'OK', 
+    version: '4.7', 
+    strategy: 'Multi-API with Fallback', 
+    features: [
+      'Multiple OpenRouter API keys', 
+      'Google Search API integration', 
+      'Gemini-1.5-Flash fallback',
+      'Improved DuckDuckGo search',
+      'Enhanced Image Generation'
+    ] 
+  });
 });
 
 app.get('/health', async (req, res) => {
@@ -854,13 +1115,19 @@ app.get('/api/model-stats', (req, res) => {
   const stats = {};
   for (const [id, d] of modelStats.entries()) {
     const tot = d.successCount + d.failCount;
-    stats[AI_MODEL.name] = {
+    const model = id === AI_MODEL.id ? AI_MODEL : FALLBACK_MODEL;
+    stats[model.name] = {
       successRate: tot > 0 ? ((d.successCount / tot) * 100).toFixed(1) + '%' : 'N/A',
       totalCalls: tot,
       rateLimits: d.rateLimitCount
     };
   }
-  res.json({ stats, strategy: 'Single GLM-4.5-Air model' });
+  res.json({ 
+    stats, 
+    strategy: 'Multi-API with fallback',
+    openRouterKeys: openRouterKeys.length,
+    googleApiEnabled: !!(googleApiKey && googleSearchEngineId)
+  });
 });
 
 app.post('/api/register', authLimiter, async (req, res) => {
@@ -1154,13 +1421,11 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\n🚀 SINGLE MODEL v4.6');
-  console.log('   ✓ Using GLM-4.5-Air model for all operations');
-  console.log('   ✓ Improved search vs chat detection');
-  console.log('   ✓ No false positives for coding/knowledge');
-  console.log('   ✓ Product-specific queries auto-detected');
-  console.log('   ✓ Real-time/news queries auto-detected');
-  console.log('   ✓ Explicit keywords supported');
+  console.log('\n🚀 MULTI-API v4.7');
+  console.log('   ✓ Multiple OpenRouter API keys with rotation');
+  console.log('   ✓ Google Search API integration');
+  console.log('   ✓ Gemini-1.5-Flash fallback model');
+  console.log('   ✓ Improved DuckDuckGo search with multiple sources');
   console.log('   ✓ Enhanced image generation with translation');
   console.log('\n🎯 Detection Logic:');
   console.log('   • Explicit: "tìm kiếm:", "search:"');
@@ -1168,12 +1433,20 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   • Real-time: news, weather, prices');
   console.log('   • Specific facts: CEO of X, price of Y');
   console.log('   • DEFAULT: Chat mode (no search)');
+  console.log('\n🔍 Search Strategy:');
+  console.log('   • DuckDuckGo: Primary search source');
+  console.log('   • Google API: Secondary search source');
+  console.log('   • Wikipedia: Tertiary search source');
+  console.log('   • Site-specific: Targeted searches');
   console.log('\n🎨 Image Generation:');
   console.log('   • Vietnamese to English translation');
   console.log('   • Detailed prompt enhancement');
   console.log('   • Art style, lighting, composition details');
-  console.log('\n📊 Model:');
-  console.log('   Single: GLM-4.5-Air');
+  console.log('\n📊 Models:');
+  console.log(`   Primary: ${AI_MODEL.name}`);
+  console.log(`   Fallback: ${FALLBACK_MODEL.name}`);
+  console.log(`   API Keys: ${openRouterKeys.length} OpenRouter keys`);
+  console.log(`   Google API: ${googleApiKey && googleSearchEngineId ? 'Enabled' : 'Disabled'}`);
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
   console.log('========================================\n');
 });
