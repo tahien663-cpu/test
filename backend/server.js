@@ -13,6 +13,7 @@ import { validate } from 'uuid';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import * as cheerio from 'cheerio';
+import { LRUCache } from 'lru-cache';
 
 dotenv.config();
 
@@ -85,9 +86,33 @@ const rateLimitTracker = new Map();
 const currentOpenRouterKeyIndex = { value: 0 };
 const currentGeminiKeyIndex = { value: 0 };
 
-// Image cache for performance
-const imageCache = new Map();
-const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+// Enhanced caching with LRU strategy
+const imageCache = new LRUCache({
+  max: 500, // Maximum number of items
+  ttl: 1000 * 60 * 60 * 24, // 24 hours
+  updateAgeOnGet: true
+});
+
+// Add cache for search results
+const searchCache = new LRUCache({
+  max: 200,
+  ttl: 1000 * 60 * 30, // 30 minutes
+  updateAgeOnGet: true
+});
+
+// Add cache for prompt enhancements
+const promptCache = new LRUCache({
+  max: 300,
+  ttl: 1000 * 60 * 60, // 1 hour
+  updateAgeOnGet: true
+});
+
+// Add cache for user sessions
+const userCache = new LRUCache({
+  max: 1000,
+  ttl: 1000 * 60 * 15, // 15 minutes
+  updateAgeOnGet: true
+});
 
 // Generate a cache key from the prompt
 function getCacheKey(prompt) {
@@ -103,11 +128,7 @@ function getCacheKey(prompt) {
 // Check if image is in cache
 function getCachedImage(prompt) {
   const key = getCacheKey(prompt);
-  const cached = imageCache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached;
-  }
-  return null;
+  return imageCache.get(key);
 }
 
 // Store image in cache
@@ -117,16 +138,40 @@ function cacheImage(prompt, imageUrl) {
     url: imageUrl,
     timestamp: Date.now()
   });
-  
-  // Clean up old cache entries periodically
-  if (imageCache.size > 100) {
-    const now = Date.now();
-    for (const [k, v] of imageCache.entries()) {
-      if (now - v.timestamp > CACHE_TTL) {
-        imageCache.delete(k);
-      }
-    }
-  }
+}
+
+// Check if search result is in cache
+function getCachedSearch(query) {
+  const key = getCacheKey(query);
+  return searchCache.get(key);
+}
+
+// Store search result in cache
+function cacheSearch(query, result) {
+  const key = getCacheKey(query);
+  searchCache.set(key, result);
+}
+
+// Check if prompt enhancement is in cache
+function getCachedPrompt(prompt) {
+  const key = getCacheKey(prompt);
+  return promptCache.get(key);
+}
+
+// Store prompt enhancement in cache
+function cachePrompt(prompt, enhanced) {
+  const key = getCacheKey(prompt);
+  promptCache.set(key, enhanced);
+}
+
+// Check if user session is in cache
+function getCachedUser(userId) {
+  return userCache.get(userId);
+}
+
+// Store user session in cache
+function cacheUser(userId, userData) {
+  userCache.set(userId, userData);
 }
 
 function initModelStats() {
@@ -370,6 +415,11 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
 
 // ==================== PROMPT ENHANCEMENT ====================
 async function enhancePrompt(txt, isImg = false) {
+  // Check cache first
+  const cacheKey = `${txt}_${isImg ? 'img' : 'text'}`;
+  const cached = getCachedPrompt(cacheKey);
+  if (cached) return cached;
+  
   try {
     const sys = isImg 
       ? 'You are the one to improve the image prompt. Translate to English if needed, add artistic details, lighting, composition and style, perspective, realism. Max 200 characters. Only return the improved prompt, no explanation needed.' 
@@ -382,7 +432,12 @@ async function enhancePrompt(txt, isImg = false) {
     
     const e = r.content.trim() || txt;
     const max = isImg ? 200 : 500;
-    return e.length > max ? e.substring(0, max - 3) + '...' : e;
+    const result = e.length > max ? e.substring(0, max - 3) + '...' : e;
+    
+    // Cache the result
+    cachePrompt(cacheKey, result);
+    
+    return result;
   } catch {
     return txt;
   }
@@ -842,6 +897,14 @@ async function crawlWebpage(url) {
 
 async function smartSearch(query) {
   console.log(`\n🔍 Smart Search: "${query}"`);
+  
+  // Check cache first
+  const cached = getCachedSearch(query);
+  if (cached) {
+    console.log('   Using cached search results');
+    return cached;
+  }
+  
   const queryType = detectQueryType(query);
   console.log(`   Type: ${queryType}`);
   
@@ -895,13 +958,17 @@ async function smartSearch(query) {
       topUrls = suggestedSites.slice(0, 5);
     }
     
-    if (topUrls.length === 0) return { query, queryType, suggestedSites, searchResults: [], crawledData: [], totalSources: 0 };
+    if (topUrls.length === 0) {
+      const result = { query, queryType, suggestedSites, searchResults: [], crawledData: [], totalSources: 0 };
+      cacheSearch(query, result);
+      return result;
+    }
     
     const crawlPromises = topUrls.map(url => crawlWebpage(url));
     const crawledData = (await Promise.all(crawlPromises)).filter(d => d !== null);
     console.log(`   Crawled ${crawledData.length}/${topUrls.length} pages`);
     
-    return {
+    const result = {
       query,
       queryType,
       suggestedSites,
@@ -909,9 +976,16 @@ async function smartSearch(query) {
       crawledData,
       totalSources: crawledData.length + uniqueResults.length
     };
+    
+    // Cache the result
+    cacheSearch(query, result);
+    
+    return result;
   } catch (e) {
     console.error('   Error:', e.message);
-    return { query, queryType: 'general', suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
+    const result = { query, queryType: 'general', suggestedSites: [], searchResults: [], crawledData: [], totalSources: 0 };
+    cacheSearch(query, result);
+    return result;
   }
 }
 
@@ -1191,24 +1265,137 @@ function sanitizeInput(i) {
 function authenticateToken(req, res, next) {
   const token = req.headers['authorization']?.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token' });
+  
+  // Check cache first
+  try {
+    const decoded = jwt.verify(token, jwtSecret);
+    const cachedUser = getCachedUser(decoded.id);
+    if (cachedUser) {
+      req.user = cachedUser;
+      return next();
+    }
+  } catch (e) {
+    // Token is invalid, continue with normal verification
+  }
+  
   jwt.verify(token, jwtSecret, (err, user) => {
     if (err) return res.status(403).json({ error: 'Invalid token' });
     req.user = user;
+    // Cache the user session
+    cacheUser(user.id, user);
     next();
   });
+}
+
+// ==================== DATABASE HELPERS ====================
+async function getUserById(userId) {
+  // Check cache first
+  const cachedUser = getCachedUser(userId);
+  if (cachedUser) return cachedUser;
+  
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', userId)
+      .maybeSingle();
+    
+    if (error || !data) return null;
+    
+    // Cache the user
+    cacheUser(userId, data);
+    return data;
+  } catch (e) {
+    console.error('Error fetching user:', e);
+    return null;
+  }
+}
+
+async function createChat(userId, title) {
+  try {
+    const { data, error } = await supabase
+      .from('chats')
+      .insert([{ user_id: userId, title: title.substring(0, 50) }])
+      .select()
+      .single();
+    
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    console.error('Error creating chat:', e);
+    throw e;
+  }
+}
+
+async function getChatById(chatId, userId) {
+  try {
+    const { data, error } = await supabase
+      .from('chats')
+      .select('*')
+      .eq('id', chatId)
+      .eq('user_id', userId)
+      .maybeSingle();
+    
+    if (error || !data) return null;
+    return data;
+  } catch (e) {
+    console.error('Error fetching chat:', e);
+    return null;
+  }
+}
+
+async function addMessage(chatId, role, content) {
+  try {
+    const { data, error } = await supabase
+      .from('messages')
+      .insert([{
+        chat_id: chatId,
+        role,
+        content: sanitizeInput(content),
+        timestamp: new Date().toISOString()
+      }])
+      .select()
+      .single();
+    
+    if (error) throw error;
+    return data;
+  } catch (e) {
+    console.error('Error adding message:', e);
+    throw e;
+  }
+}
+
+async function updateChatLastMessage(chatId, lastMessage) {
+  try {
+    const { error } = await supabase
+      .from('chats')
+      .update({
+        last_message: sanitizeInput(lastMessage).substring(0, 100),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', chatId);
+    
+    if (error) throw error;
+    return true;
+  } catch (e) {
+    console.error('Error updating chat:', e);
+    return false;
+  }
 }
 
 // ==================== ROUTES ====================
 app.get('/', (req, res) => {
   res.json({ 
     status: 'OK', 
-    version: '5.0', 
-    strategy: 'Multi-API with Comma-Separated Keys', 
+    version: '5.1', 
+    strategy: 'Multi-API with Comma-Separated Keys & Enhanced Caching', 
     features: [
       'Comma-separated API keys for both OpenRouter and Gemini',
       'Gemini-1.5-Flash fallback model',
       'Improved DuckDuckGo search',
-      'Enhanced Image Generation with caching'
+      'Enhanced Image Generation with caching',
+      'LRU caching for better performance',
+      'Optimized database operations'
     ] 
   });
 });
@@ -1239,7 +1426,10 @@ app.get('/api/model-stats', (req, res) => {
     strategy: 'Comma-separated API keys for both OpenRouter and Gemini',
     openRouterKeys: openRouterKeys.length,
     geminiKeys: geminiKeys.length,
-    imageCacheSize: imageCache.size
+    imageCacheSize: imageCache.size,
+    searchCacheSize: searchCache.size,
+    promptCacheSize: promptCache.size,
+    userCacheSize: userCache.size
   });
 });
 
@@ -1256,6 +1446,10 @@ app.post('/api/register', authLimiter, async (req, res) => {
     const { data: u, error } = await supabase.from('users').insert([{ email: e, password: h, name: n }]).select().single();
     if (error) return res.status(500).json({ error: 'Registration failed' });
     const token = jwt.sign({ id: u.id, email: u.email }, jwtSecret, { expiresIn: '7d' });
+    
+    // Cache the user
+    cacheUser(u.id, { id: u.id, email: u.email, name: u.name });
+    
     res.status(201).json({ token, user: { id: u.id, email: u.email, name: u.name } });
   } catch {
     res.status(500).json({ error: 'Server error' });
@@ -1272,6 +1466,10 @@ app.post('/api/login', authLimiter, async (req, res) => {
     const ok = await bcrypt.compare(password, u.password);
     if (!ok) return res.status(401).json({ error: 'Invalid credentials' });
     const token = jwt.sign({ id: u.id, email: u.email }, jwtSecret, { expiresIn: '7d' });
+    
+    // Cache the user
+    cacheUser(u.id, { id: u.id, email: u.email, name: u.name });
+    
     res.json({ token, user: { id: u.id, email: u.email, name: u.name } });
   } catch {
     res.status(500).json({ error: 'Server error' });
@@ -1288,11 +1486,9 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
 
     if (!cid) {
       const fm = sanitizeInput(prompt || messages[0]?.content || 'New chat');
-      const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: fm.substring(0, 50) }]).select().single();
-      if (error) return res.status(500).json({ error: 'Failed to create chat' });
-      cid = c.id;
+      cid = await createChat(uid, fm);
     } else {
-      const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
+      const c = await getChatById(cid, uid);
       if (!c) return res.status(404).json({ error: 'Chat not found' });
       cid = c.id;
     }
@@ -1300,7 +1496,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     const uc = prompt ? sanitizeInput(prompt) : sanitizeInput(messages.filter(m => m.role === 'user').pop()?.content || '');
     if (!uc) return res.status(400).json({ error: 'No message' });
 
-    await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: uc, timestamp: new Date().toISOString() }]);
+    await addMessage(cid, 'user', uc);
 
     const t0 = Date.now();
     let msg = '', model = '', modelName = '', isSearch = false, srcs = [];
@@ -1369,10 +1565,8 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
     const dt = ((Date.now() - t0) / 1000).toFixed(2);
     msg += isSearch ? `\n\n*${dt}s | ${srcs.length} sources*` : `\n\n*${modelName} | ${dt}s*`;
 
-    const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: sanitizeInput(msg), timestamp: new Date().toISOString() }]).select().single();
-    if (me) return res.status(500).json({ error: 'Failed to save' });
-
-    await supabase.from('chats').update({ last_message: sanitizeInput(uc).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', cid);
+    const sm = await addMessage(cid, 'ai', msg);
+    await updateChatLastMessage(cid, uc);
 
     res.json({ message: msg, messageId: sm.id, chatId: cid, timestamp: sm.timestamp, isWebSearch: isSearch, usedModel: modelName });
   } catch (e) {
@@ -1399,22 +1593,18 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       
       // Create chat if needed
       if (!cid) {
-        const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: `Image: ${sp.substring(0, 40)}` }]).select().single();
-        if (error) return res.status(500).json({ error: 'Failed to create chat' });
-        cid = c.id;
+        cid = await createChat(uid, `Image: ${sp.substring(0, 40)}`);
       } else {
-        const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
+        const c = await getChatById(cid, uid);
         if (!c) return res.status(404).json({ error: 'Chat not found' });
       }
 
-      await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
+      await addMessage(cid, 'user', sp);
       
       const mc = `![Image](${cachedImage.url})\n\n**Prompt:** ${sp}\n\n*Cached image*`;
       
-      const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
-      if (me) return res.status(500).json({ error: 'Failed to save' });
-
-      await supabase.from('chats').update({ last_message: `Image: ${sp.substring(0, 50)}`, updated_at: new Date().toISOString() }).eq('id', cid);
+      const sm = await addMessage(cid, 'ai', mc);
+      await updateChatLastMessage(cid, `Image: ${sp.substring(0, 50)}`);
 
       return res.json({ 
         message: mc, 
@@ -1429,15 +1619,13 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
     // Create chat if needed
     if (!cid) {
-      const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: `Image: ${sp.substring(0, 40)}` }]).select().single();
-      if (error) return res.status(500).json({ error: 'Failed to create chat' });
-      cid = c.id;
+      cid = await createChat(uid, `Image: ${sp.substring(0, 40)}`);
     } else {
-      const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
+      const c = await getChatById(cid, uid);
       if (!c) return res.status(404).json({ error: 'Chat not found' });
     }
 
-    await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
+    await addMessage(cid, 'user', sp);
 
     const t0 = Date.now();
     
@@ -1494,10 +1682,8 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     // Create detailed message with all steps
     const mc = `![Image](${furl})\n\n**Original Prompt:** ${sp}\n**Translated:** ${translatedPrompt}\n**Enhanced:** ${detailedPrompt}\n\n*Generated with ${imageResult.model} in ${dt}s*`;
 
-    const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
-    if (me) return res.status(500).json({ error: 'Failed to save' });
-
-    await supabase.from('chats').update({ last_message: `Image: ${sp.substring(0, 50)}`, updated_at: new Date().toISOString() }).eq('id', cid);
+    const sm = await addMessage(cid, 'ai', mc);
+    await updateChatLastMessage(cid, `Image: ${sp.substring(0, 50)}`);
 
     res.json({ 
       message: mc, 
@@ -1543,7 +1729,7 @@ app.delete('/api/chat/:chatId', authenticateToken, async (req, res) => {
     const { chatId } = req.params;
     const uid = req.user.id;
     if (!validate(chatId)) return res.status(400).json({ error: 'Invalid chat ID' });
-    const { data: c } = await supabase.from('chats').select('id').eq('id', chatId).eq('user_id', uid).maybeSingle();
+    const c = await getChatById(chatId, uid);
     if (!c) return res.status(404).json({ error: 'Chat not found' });
     await supabase.from('messages').delete().eq('chat_id', chatId);
     await supabase.from('chats').delete().eq('id', chatId).eq('user_id', uid);
@@ -1560,12 +1746,12 @@ app.delete('/api/message/:messageId', authenticateToken, async (req, res) => {
     if (!validate(messageId)) return res.status(400).json({ error: 'Invalid message ID' });
     const { data: m, error: me } = await supabase.from('messages').select('chat_id').eq('id', messageId).maybeSingle();
     if (me || !m) return res.status(404).json({ error: 'Message not found' });
-    const { data: c, error: ce } = await supabase.from('chats').select('id').eq('id', m.chat_id).eq('user_id', uid).maybeSingle();
-    if (ce || !c) return res.status(404).json({ error: 'Chat not found' });
+    const c = await getChatById(m.chat_id, uid);
+    if (!c) return res.status(404).json({ error: 'Chat not found' });
     const { error: de } = await supabase.from('messages').delete().eq('id', messageId);
     if (de) return res.status(500).json({ error: 'Failed to delete' });
     const { data: lm } = await supabase.from('messages').select('content').eq('chat_id', m.chat_id).order('timestamp', { ascending: false }).limit(1).maybeSingle();
-    if (lm) await supabase.from('chats').update({ last_message: sanitizeInput(lm.content).substring(0, 100), updated_at: new Date().toISOString() }).eq('id', m.chat_id);
+    if (lm) await updateChatLastMessage(m.chat_id, lm.content);
     res.json({ message: 'Message deleted', messageId });
   } catch {
     res.status(500).json({ error: 'Server error' });
@@ -1590,11 +1776,13 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\n🚀 MULTI-API v5.0');
+  console.log('\n🚀 MULTI-API v5.1 - OPTIMIZED');
   console.log('   ✓ Comma-separated API keys for both OpenRouter and Gemini');
   console.log('   ✓ Gemini-1.5-Flash fallback model');
   console.log('   ✓ Improved DuckDuckGo search with multiple sources');
   console.log('   ✓ Enhanced image generation with caching');
+  console.log('   ✓ LRU caching for better performance');
+  console.log('   ✓ Optimized database operations');
   console.log('\n🎯 Detection Logic:');
   console.log('   • Explicit: "tìm kiếm:", "search:"');
   console.log('   • Products: Dell 5420, iPhone 15, etc.');
@@ -1605,6 +1793,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   • DuckDuckGo: Primary search source');
   console.log('   • Wikipedia: Secondary search source');
   console.log('   • Site-specific: Targeted searches');
+  console.log('   • Search result caching for faster responses');
   console.log('\n🎨 Image Generation:');
   console.log('   • Vietnamese to English translation');
   console.log('   • Detailed prompt enhancement');
