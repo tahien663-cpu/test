@@ -20,7 +20,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // ==================== CONFIGURATION ====================
-const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
+const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET', 'GEMINI_API_KEY'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
     console.error(`Missing: ${envVar}`);
@@ -31,17 +31,17 @@ for (const envVar of requiredEnvVars) {
 const app = express();
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// Multiple API keys for OpenRouter
-const openRouterKeys = [
-  process.env.OPENROUTER_API_KEY,
-  process.env.OPENROUTER_API_KEY_2,
-  process.env.OPENROUTER_API_KEY_3,
-  process.env.OPENROUTER_API_KEY_4,
-  process.env.OPENROUTER_API_KEY_5
-].filter(key => key); // Filter out undefined keys
+// Parse comma-separated API keys
+const openRouterKeys = process.env.OPENROUTER_API_KEY
+  .split(',')
+  .map(key => key.trim())
+  .filter(key => key.length > 0);
 
-const googleApiKey = process.env.GOOGLE_API_KEY;
-const googleSearchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
+const geminiKeys = process.env.GEMINI_API_KEY
+  .split(',')
+  .map(key => key.trim())
+  .filter(key => key.length > 0);
+
 const jwtSecret = process.env.JWT_SECRET;
 
 // STRATEGY: Using single model for all categories
@@ -53,7 +53,7 @@ const AI_MODEL = {
 
 // Fallback model for when OpenRouter fails
 const FALLBACK_MODEL = {
-  id: 'google/gemini-1.5-flash',
+  id: 'gemini-1.5-flash',
   timeout: 60000,
   name: 'Gemini-1.5-Flash'
 };
@@ -61,7 +61,8 @@ const FALLBACK_MODEL = {
 // ==================== MODEL MANAGEMENT ====================
 const modelStats = new Map();
 const rateLimitTracker = new Map();
-const currentApiKeyIndex = { value: 0 };
+const currentOpenRouterKeyIndex = { value: 0 };
+const currentGeminiKeyIndex = { value: 0 };
 
 function initModelStats() {
   modelStats.set(AI_MODEL.id, { successCount: 0, failCount: 0, lastUsed: null, rateLimitCount: 0 });
@@ -109,10 +110,17 @@ function updateModelStats(id, ok) {
   modelStats.set(id, s);
 }
 
-function getNextApiKey() {
+function getNextOpenRouterKey() {
   if (openRouterKeys.length === 0) return null;
-  const key = openRouterKeys[currentApiKeyIndex.value];
-  currentApiKeyIndex.value = (currentApiKeyIndex.value + 1) % openRouterKeys.length;
+  const key = openRouterKeys[currentOpenRouterKeyIndex.value];
+  currentOpenRouterKeyIndex.value = (currentOpenRouterKeyIndex.value + 1) % openRouterKeys.length;
+  return key;
+}
+
+function getNextGeminiKey() {
+  if (geminiKeys.length === 0) return null;
+  const key = geminiKeys[currentGeminiKeyIndex.value];
+  currentGeminiKeyIndex.value = (currentGeminiKeyIndex.value + 1) % geminiKeys.length;
   return key;
 }
 
@@ -157,7 +165,7 @@ async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
 }
 
 async function callOpenRouterModel(msgs, temperature, maxTokens) {
-  const apiKey = getNextApiKey();
+  const apiKey = getNextOpenRouterKey();
   if (!apiKey) throw new Error('No OpenRouter API keys available');
   
   const t0 = Date.now();
@@ -222,12 +230,15 @@ async function callOpenRouterModel(msgs, temperature, maxTokens) {
 }
 
 async function callGeminiModel(msgs, temperature, maxTokens) {
+  const apiKey = getNextGeminiKey();
+  if (!apiKey) throw new Error('No Gemini API keys available');
+  
   const t0 = Date.now();
   const ctrl = new AbortController();
   const to = setTimeout(() => ctrl.abort(), FALLBACK_MODEL.timeout);
   
   try {
-    console.log(`🤖 Using ${FALLBACK_MODEL.name} as fallback...`);
+    console.log(`🤖 Using ${FALLBACK_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
     
     // Convert messages to Gemini format
     const geminiMsgs = msgs.map(msg => ({
@@ -235,7 +246,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
       parts: [{ text: msg.content }]
     }));
     
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL.id}:generateContent?key=${googleApiKey}`, {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${FALLBACK_MODEL.id}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -595,52 +606,6 @@ async function searchDuckDuckGo(query) {
   }
 }
 
-async function searchGoogle(query) {
-  if (!googleApiKey || !googleSearchEngineId) {
-    console.log('   ⚠️ Google API keys not configured, skipping Google search');
-    return [];
-  }
-  
-  try {
-    const eq = encodeURIComponent(query);
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), 10000);
-    
-    const r = await fetch(`https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${googleSearchEngineId}&q=${eq}&num=5`, {
-      signal: ctrl.signal,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
-    });
-    
-    clearTimeout(to);
-    
-    if (!r.ok) {
-      console.log(`   ❌ Google search failed: ${r.status}`);
-      return [];
-    }
-    
-    const data = await r.json();
-    const results = [];
-    
-    if (data.items && Array.isArray(data.items)) {
-      data.items.forEach(item => {
-        const domain = new URL(item.link).hostname.replace('www.', '');
-        results.push({
-          title: item.title,
-          snippet: item.snippet,
-          link: item.link,
-          source: domain,
-          priority: 9
-        });
-      });
-    }
-    
-    return results;
-  } catch (e) {
-    console.error('   Error in Google search:', e.message);
-    return [];
-  }
-}
-
 async function searchWikipedia(query) {
   try {
     const eq = encodeURIComponent(query);
@@ -825,7 +790,6 @@ async function smartSearch(query) {
     // Search from multiple sources in parallel
     const searchPromises = [
       searchDuckDuckGo(query),
-      searchGoogle(query),
       searchWikipedia(query),
       searchSpecificSites(query, suggestedSites)
     ];
@@ -1089,12 +1053,11 @@ function authenticateToken(req, res, next) {
 app.get('/', (req, res) => {
   res.json({ 
     status: 'OK', 
-    version: '4.7', 
-    strategy: 'Multi-API with Fallback', 
+    version: '5.0', 
+    strategy: 'Multi-API with Comma-Separated Keys', 
     features: [
-      'Multiple OpenRouter API keys', 
-      'Google Search API integration', 
-      'Gemini-1.5-Flash fallback',
+      'Comma-separated API keys for both OpenRouter and Gemini',
+      'Gemini-1.5-Flash fallback model',
       'Improved DuckDuckGo search',
       'Enhanced Image Generation'
     ] 
@@ -1124,9 +1087,9 @@ app.get('/api/model-stats', (req, res) => {
   }
   res.json({ 
     stats, 
-    strategy: 'Multi-API with fallback',
+    strategy: 'Comma-separated API keys for both OpenRouter and Gemini',
     openRouterKeys: openRouterKeys.length,
-    googleApiEnabled: !!(googleApiKey && googleSearchEngineId)
+    geminiKeys: geminiKeys.length
   });
 });
 
@@ -1421,9 +1384,8 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\n🚀 MULTI-API v4.7');
-  console.log('   ✓ Multiple OpenRouter API keys with rotation');
-  console.log('   ✓ Google Search API integration');
+  console.log('\n🚀 MULTI-API v5.0');
+  console.log('   ✓ Comma-separated API keys for both OpenRouter and Gemini');
   console.log('   ✓ Gemini-1.5-Flash fallback model');
   console.log('   ✓ Improved DuckDuckGo search with multiple sources');
   console.log('   ✓ Enhanced image generation with translation');
@@ -1435,8 +1397,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   • DEFAULT: Chat mode (no search)');
   console.log('\n🔍 Search Strategy:');
   console.log('   • DuckDuckGo: Primary search source');
-  console.log('   • Google API: Secondary search source');
-  console.log('   • Wikipedia: Tertiary search source');
+  console.log('   • Wikipedia: Secondary search source');
   console.log('   • Site-specific: Targeted searches');
   console.log('\n🎨 Image Generation:');
   console.log('   • Vietnamese to English translation');
@@ -1445,8 +1406,8 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('\n📊 Models:');
   console.log(`   Primary: ${AI_MODEL.name}`);
   console.log(`   Fallback: ${FALLBACK_MODEL.name}`);
-  console.log(`   API Keys: ${openRouterKeys.length} OpenRouter keys`);
-  console.log(`   Google API: ${googleApiKey && googleSearchEngineId ? 'Enabled' : 'Disabled'}`);
+  console.log(`   OpenRouter Keys: ${openRouterKeys.length}`);
+  console.log(`   Gemini Keys: ${geminiKeys.length}`);
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
   console.log('========================================\n');
 });
