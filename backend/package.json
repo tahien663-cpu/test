@@ -1,6 +1,6 @@
 {
   "name": "hein-ai-backend",
-  "version": "4.0.0",
+  "version": "5.1.0",
   "type": "module",
   "main": "server.js",
   "scripts": {
@@ -22,6 +22,7 @@
     "form-data": "^4.0.4",
     "helmet": "^7.1.0",
     "jsonwebtoken": "^9.0.2",
+    "lru-cache": "^10.0.0",
     "node-fetch": "^3.3.2",
     "uuid": "^9.0.1",
     "xss": "^1.0.11"
@@ -32,15 +33,17 @@
   "engines": {
     "node": ">=18.0.0"
   },
-  "description": "AI Chat Backend with Smart Web Crawling - DeepSeek Priority",
+  "description": "AI Chat Backend with Smart Web Crawling - Multi-API with Enhanced Caching",
   "keywords": [
     "ai",
     "chatbot",
-    "deepseek",
+    "multi-api",
     "web-crawling",
     "search",
     "express",
-    "supabase"
+    "supabase",
+    "caching",
+    "lru-cache"
   ],
   "author": "Hien2309",
   "license": "MIT"
