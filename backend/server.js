@@ -422,7 +422,7 @@ async function enhancePrompt(txt, isImg = false) {
   
   try {
     const sys = isImg 
-      ? 'You are the one to improve the image prompt. Translate to English if needed, add artistic details, lighting, composition and style, perspective, realism. Max 200 characters. Only return the improved prompt, no explanation needed.' 
+      ? 'You are the one to improve the image prompt. Translate to English if needed, add artistic details, lighting, composition and style, perspective, realism. Max 120 characters. Only return the improved prompt, no explanation needed.' 
       : 'You are a prompt enhancer. Make the prompt clearer, more specific, and better structured. Max 200 characters. Only return the enhanced prompt, no explanation.';
     
     const r = await callAISingleModel([
