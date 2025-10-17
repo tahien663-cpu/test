@@ -46,9 +46,6 @@ const geminiKeys = process.env.GEMINI_API_KEY
 
 const jwtSecret = process.env.JWT_SECRET;
 
-// Initialize GoogleGenAI with the first API key
-const genAI = new GoogleGenAI({ apiKey: geminiKeys[0] });
-
 // STRATEGY: Using Gemini 2.5 Flash Lite as primary model for all categories
 const AI_MODEL = {
   id: 'gemini-2.5-flash-lite',
@@ -288,7 +285,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     console.log(`🤖 Using ${AI_MODEL.name} with API key ending in ${apiKey.slice(-4)}...`);
     
     // Initialize GoogleGenAI with the current API key
-    const genAI = new GoogleGenAI({ apiKey });
+    const genAI = new GoogleGenAI(apiKey);
     
     // Get the model
     const model = genAI.getGenerativeModel({ model: AI_MODEL.id });
@@ -308,7 +305,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
     
     // Generate content
     const response = await model.generateContent({
-      contents: prompt,
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
         temperature: temperature,
         maxOutputTokens: maxTokens,
