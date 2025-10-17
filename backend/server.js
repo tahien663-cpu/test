@@ -19,6 +19,7 @@ dotenv.config();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// ==================== CONFIGURATION ====================
 const requiredEnvVars = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'OPENROUTER_API_KEY', 'JWT_SECRET'];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
@@ -32,36 +33,20 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SER
 const openRouterKey = process.env.OPENROUTER_API_KEY;
 const jwtSecret = process.env.JWT_SECRET;
 
-// STRATEGY: Dùng 1 model cho mỗi category, fallback chỉ khi thất bại
-const AI_MODELS = {
-  chat: [
-    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 60000, name: 'DeepSeek' },
-    { id: 'google/gemini-2.0-flash-exp:free', timeout: 60000, name: 'Gemini' },
-    { id: 'qwen/qwen3-4b:free', timeout: 60000, name: 'Qwen' },
-    { id: 'meta-llama/llama-3.3-8b-instruct:free', timeout: 60000, name: 'Llama' }
-  ],
-  quick: [
-    { id: 'qwen/qwen3-4b:free', timeout: 60000, name: 'Qwen' },
-    { id: 'google/gemini-2.0-flash-exp:free', timeout: 60000, name: 'Gemini' },
-    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 60000, name: 'DeepSeek' }
-  ],
-  research: [
-    { id: 'alibaba/tongyi-deepresearch-30b-a3b:free', timeout: 60000, name: 'DeepResearch' },
-    { id: 'deepseek/deepseek-chat-v3.1:free', timeout: 60000, name: 'DeepSeek' },
-    { id: 'google/gemini-2.0-flash-exp:free', timeout: 60000, name: 'Gemini' }
-  ]
+// STRATEGY: Using single model for all categories
+const AI_MODEL = {
+  id: 'z-ai/glm-4.5-air:free',
+  timeout: 60000,
+  name: 'GLM-4.5-Air'
 };
 
+// ==================== MODEL MANAGEMENT ====================
 const modelStats = new Map();
 const rateLimitTracker = new Map();
 
 function initModelStats() {
-  for (const cat in AI_MODELS) {
-    AI_MODELS[cat].forEach(m => {
-      modelStats.set(m.id, { successCount: 0, failCount: 0, lastUsed: null, rateLimitCount: 0 });
-      rateLimitTracker.set(m.id, { isRateLimited: false, rateLimitUntil: null });
-    });
-  }
+  modelStats.set(AI_MODEL.id, { successCount: 0, failCount: 0, lastUsed: null, rateLimitCount: 0 });
+  rateLimitTracker.set(AI_MODEL.id, { isRateLimited: false, rateLimitUntil: null });
 }
 initModelStats();
 
@@ -102,94 +87,90 @@ function updateModelStats(id, ok) {
   modelStats.set(id, s);
 }
 
-// CORE: Chỉ dùng 1 model tại 1 thời điểm, fallback chỉ khi thất bại
+// ==================== AI MODEL CALLING ====================
+// CORE: Using single model for all operations
 async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
-  const models = AI_MODELS[cat] || AI_MODELS.chat;
   const { temperature = 0.7, maxTokens = 500 } = opts;
   
-  for (const model of models) {
-    if (isModelRateLimited(model.id)) {
-      console.log(`⏭️  Skip ${model.name} (rate limited)`);
-      continue;
-    }
-    
-    const t0 = Date.now();
-    const ctrl = new AbortController();
-    const to = setTimeout(() => ctrl.abort(), model.timeout);
-    
-    try {
-      console.log(`🤖 Using ${model.name}... (timeout: ${model.timeout/1000}s)`);
-      
-      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${openRouterKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': 'https://hein1.onrender.com',
-          'X-Title': 'Hein AI'
-        },
-        body: JSON.stringify({ model: model.id, messages: msgs, temperature, max_tokens: maxTokens }),
-        signal: ctrl.signal
-      });
-      
-      clearTimeout(to);
-      const dt = Date.now() - t0;
-      
-      if (!r.ok) {
-        const err = await r.text().catch(() => '');
-        console.log(`   ❌ ${model.name} failed (${r.status}) in ${dt}ms`);
-        
-        if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
-          const retrySecs = parseRetryAfter(err);
-          markModelRateLimited(model.id, retrySecs);
-        }
-        
-        updateModelStats(model.id, false);
-        continue;
-      }
-      
-      const data = await r.json();
-      const content = data.choices?.[0]?.message?.content;
-      
-      if (!content) {
-        console.log(`   ❌ ${model.name} returned empty content`);
-        updateModelStats(model.id, false);
-        continue;
-      }
-      
-      console.log(`   ✅ ${model.name} succeeded in ${dt}ms`);
-      updateModelStats(model.id, true);
-      
-      return { content, modelId: model.id, modelName: model.name, responseTime: dt };
-      
-    } catch (e) {
-      clearTimeout(to);
-      const dt = Date.now() - t0;
-      
-      if (e.name === 'AbortError') {
-        console.log(`   ⏱️  ${model.name} timeout after ${dt}ms`);
-      } else {
-        console.log(`   ❌ ${model.name} error: ${e.message}`);
-      }
-      
-      updateModelStats(model.id, false);
-      continue;
-    }
+  if (isModelRateLimited(AI_MODEL.id)) {
+    console.log(`⏭️  Skip ${AI_MODEL.name} (rate limited)`);
+    throw new Error('Model is rate limited');
   }
   
-  throw new Error('All models failed');
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), AI_MODEL.timeout);
+  
+  try {
+    console.log(`🤖 Using ${AI_MODEL.name}... (timeout: ${AI_MODEL.timeout/1000}s)`);
+    
+    const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openRouterKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({ model: AI_MODEL.id, messages: msgs, temperature, max_tokens: maxTokens }),
+      signal: ctrl.signal
+    });
+    
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (!r.ok) {
+      const err = await r.text().catch(() => '');
+      console.log(`   ❌ ${AI_MODEL.name} failed (${r.status}) in ${dt}ms`);
+      
+      if (r.status === 429 || err.toLowerCase().includes('rate limit')) {
+        const retrySecs = parseRetryAfter(err);
+        markModelRateLimited(AI_MODEL.id, retrySecs);
+      }
+      
+      updateModelStats(AI_MODEL.id, false);
+      throw new Error(`Model failed with status ${r.status}`);
+    }
+    
+    const data = await r.json();
+    const content = data.choices?.[0]?.message?.content;
+    
+    if (!content) {
+      console.log(`   ❌ ${AI_MODEL.name} returned empty content`);
+      updateModelStats(AI_MODEL.id, false);
+      throw new Error('Model returned empty content');
+    }
+    
+    console.log(`   ✅ ${AI_MODEL.name} succeeded in ${dt}ms`);
+    updateModelStats(AI_MODEL.id, true);
+    
+    return { content, modelId: AI_MODEL.id, modelName: AI_MODEL.name, responseTime: dt };
+    
+  } catch (e) {
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (e.name === 'AbortError') {
+      console.log(`   ⏱️  ${AI_MODEL.name} timeout after ${dt}ms`);
+      throw new Error('Model request timed out');
+    } else {
+      console.log(`   ❌ ${AI_MODEL.name} error: ${e.message}`);
+      throw e;
+    }
+  }
 }
 
+// ==================== PROMPT ENHANCEMENT ====================
 async function enhancePrompt(txt, isImg = false) {
   try {
     const sys = isImg 
-      ? 'Translate to English, add artistic details. Max 70 chars, no punctuation. Only return prompt.' 
-      : 'Enhance prompt to be clearer. Max 200 chars. Only return enhanced prompt.';
+      ? 'You are an image prompt enhancer. Translate to English if needed, add artistic details, lighting, composition, and style. Max 100 characters. Only return the enhanced prompt, no explanation.' 
+      : 'You are a prompt enhancer. Make the prompt clearer, more specific, and better structured. Max 200 characters. Only return the enhanced prompt, no explanation.';
     
     const r = await callAISingleModel([
       { role: 'system', content: sys },
       { role: 'user', content: `Enhance: "${txt}"` }
-    ], 'quick', { maxTokens: isImg ? 100 : 200 });
+    ], 'quick', { maxTokens: isImg ? 150 : 200 });
     
     const e = r.content.trim() || txt;
     const max = isImg ? 200 : 500;
@@ -199,8 +180,7 @@ async function enhancePrompt(txt, isImg = false) {
   }
 }
 
-// ========== IMPROVED SEARCH DETECTION ==========
-
+// ==================== SEARCH DETECTION ====================
 function hasExplicitSearchKeyword(msg) {
   const explicitPrefixes = [
     /^tìm kiếm:/i,
@@ -227,7 +207,7 @@ function isProductQuery(msg) {
     /\b(mua|buy|bán|selling)\s+(dell|hp|lenovo|iphone|samsung|laptop|phone)/i
   ];
   
-  return productPatterns.some(p => p.test(msg));
+  return productPatterns.some(p => p.test(ml));
 }
 
 function isRealTimeQuery(msg) {
@@ -243,7 +223,7 @@ function isRealTimeQuery(msg) {
     /\b(sự kiện|event|diễn ra|happening|occurred)\b.*\b(hôm nay|today|recently|gần đây)\b/i
   ];
   
-  return realTimeIndicators.some(p => p.test(msg));
+  return realTimeIndicators.some(p => p.test(ml));
 }
 
 function isSpecificFactualQuestion(msg) {
@@ -258,7 +238,7 @@ function isSpecificFactualQuestion(msg) {
     /\b(bao nhiêu|how much|how many)\b.*\b(giá|price|cost|phí)/i
   ];
   
-  return specificFactual.some(p => p.test(msg));
+  return specificFactual.some(p => p.test(ml));
 }
 
 function shouldNotSearch(msg) {
@@ -280,7 +260,7 @@ function shouldNotSearch(msg) {
     /\b(học|learn|studying|nghiên cứu|research)\s+(về|about)/i
   ];
   
-  return noSearchPatterns.some(p => p.test(msg));
+  return noSearchPatterns.some(p => p.test(ml));
 }
 
 async function shouldSearchWeb(msg) {
@@ -325,8 +305,7 @@ async function shouldSearchWeb(msg) {
   }
 }
 
-// ========== SEARCH FUNCTIONS ==========
-
+// ==================== SEARCH FUNCTIONS ====================
 function detectQueryType(query) {
   const ql = query.toLowerCase();
   
@@ -380,13 +359,13 @@ async function suggestWebsites(query) {
     
     const sysPrompt = isVN 
       ? `Đề xuất 7 trang web TỐT NHẤT cho: "${query}"
-${productModel ? `Sản phẩm: ${productModel}` : ''}
+ ${productModel ? `Sản phẩm: ${productModel}` : ''}
 Loại: ${queryType}
 
 Ưu tiên: trang chính thức, review uy tín, Wikipedia, tin công nghệ
 Trả về JSON: ["url1", "url2", ...]`
       : `Suggest 7 BEST websites for: "${query}"
-${productModel ? `Product: ${productModel}` : ''}
+ ${productModel ? `Product: ${productModel}` : ''}
 Type: ${queryType}
 
 Priority: official sites, reviews, Wikipedia, tech news
@@ -741,6 +720,65 @@ Max 600 words.`;
   }
 }
 
+// ==================== IMAGE GENERATION ====================
+async function generateDetailedImagePrompt(userPrompt) {
+  try {
+    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(userPrompt);
+    
+    const sysPrompt = isVN 
+      ? `Bạn là một chuyên gia về nghệ thuật và hình ảnh. Hãy tạo ra một prompt chi tiết cho việc tạo hình ảnh.
+      
+Hãy phân tích yêu cầu của người dùng và tạo ra một prompt chi tiết bao gồm:
+1. Chủ đề chính (main subject)
+2. Phong cách nghệ thuật (art style)
+3. Ánh sáng (lighting)
+4. Bố cục (composition)
+5. Màu sắc (color palette)
+6. Chi tiết bổ sung (additional details)
+
+Prompt phải bằng tiếng Anh, không quá 200 từ, và chỉ trả về prompt, không giải thích.`
+      : `You are an art and image expert. Create a detailed prompt for image generation.
+      
+Analyze the user's request and create a detailed prompt including:
+1. Main subject
+2. Art style
+3. Lighting
+4. Composition
+5. Color palette
+6. Additional details
+
+The prompt must be in English, no more than 200 words, and only return the prompt, no explanation.`;
+
+    const r = await callAISingleModel([
+      { role: 'system', content: sysPrompt },
+      { role: 'user', content: `Create a detailed image prompt for: "${userPrompt}"` }
+    ], 'quick', { temperature: 0.7, maxTokens: 300 });
+    
+    return r.content.trim();
+  } catch (e) {
+    console.error('Error generating detailed prompt:', e);
+    return userPrompt;
+  }
+}
+
+async function translateToEnglish(text) {
+  try {
+    const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(text);
+    
+    if (!isVN) return text; // Already in English
+    
+    const r = await callAISingleModel([
+      { role: 'system', content: 'You are a professional translator. Translate the given Vietnamese text to English. Only return the translated text, no explanation.' },
+      { role: 'user', content: text }
+    ], 'quick', { temperature: 0.1, maxTokens: 200 });
+    
+    return r.content.trim();
+  } catch (e) {
+    console.error('Error translating to English:', e);
+    return text;
+  }
+}
+
 async function verifyImage(url) {
   await new Promise(r => setTimeout(r, 2000));
   for (let i = 1; i <= 3; i++) {
@@ -756,8 +794,7 @@ async function verifyImage(url) {
   return { success: false, attempts: 3 };
 }
 
-// ========== MIDDLEWARE ==========
-
+// ==================== MIDDLEWARE ====================
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -798,10 +835,9 @@ function authenticateToken(req, res, next) {
   });
 }
 
-// ========== ROUTES ==========
-
+// ==================== ROUTES ====================
 app.get('/', (req, res) => {
-  res.json({ status: 'OK', version: '4.4', strategy: 'Smart Search Detection', features: ['Improved Detection', 'No False Positives', 'Product Detection', 'Real-time Queries'] });
+  res.json({ status: 'OK', version: '4.6', strategy: 'Single Model', features: ['Single GLM-4.5-Air Model', 'Improved Detection', 'No False Positives', 'Product Detection', 'Real-time Queries', 'Enhanced Image Generation'] });
 });
 
 app.get('/health', async (req, res) => {
@@ -818,14 +854,13 @@ app.get('/api/model-stats', (req, res) => {
   const stats = {};
   for (const [id, d] of modelStats.entries()) {
     const tot = d.successCount + d.failCount;
-    const model = Object.values(AI_MODELS).flat().find(m => m.id === id);
-    stats[model?.name || id] = {
+    stats[AI_MODEL.name] = {
       successRate: tot > 0 ? ((d.successCount / tot) * 100).toFixed(1) + '%' : 'N/A',
       totalCalls: tot,
       rateLimits: d.rateLimitCount
     };
   }
-  res.json({ stats, strategy: 'Smart search detection with no false positives' });
+  res.json({ stats, strategy: 'Single GLM-4.5-Air model' });
 });
 
 app.post('/api/register', authLimiter, async (req, res) => {
@@ -989,8 +1024,18 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
 
     const t0 = Date.now();
-    const ep = await enhancePrompt(sp, true);
-    const eqp = encodeURIComponent(ep);
+    
+    // Step 1: Translate to English if needed
+    console.log('🌐 Translating prompt to English...');
+    const translatedPrompt = await translateToEnglish(sp);
+    
+    // Step 2: Generate detailed prompt
+    console.log('🎨 Generating detailed image prompt...');
+    const detailedPrompt = await generateDetailedImagePrompt(translatedPrompt);
+    
+    // Step 3: Generate image
+    console.log('🖼️ Generating image...');
+    const eqp = encodeURIComponent(detailedPrompt);
     const iurl = `https://image.pollinations.ai/prompt/${eqp}?width=1024&height=1024&nologo=true`;
 
     const ir = await fetch(iurl, { method: 'GET', headers: { 'Accept': 'image/*' } });
@@ -1011,15 +1056,27 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
 
     const v = await verifyImage(furl);
     const dt = ((Date.now() - t0) / 1000).toFixed(2);
-    const mc = `![Image](${furl})\n\n*Enhanced: ${ep}*\n*${dt}s ${v.success ? '(verified)' : ''}*`;
+    
+    // Create detailed message with all steps
+    const mc = `![Image](${furl})\n\n**Original Prompt:** ${sp}\n**Translated:** ${translatedPrompt}\n**Enhanced:** ${detailedPrompt}\n\n*Generation time: ${dt}s ${v.success ? '(verified)' : ''}*`;
 
     const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
     if (me) return res.status(500).json({ error: 'Failed to save' });
 
     await supabase.from('chats').update({ last_message: `Image: ${sp.substring(0, 50)}`, updated_at: new Date().toISOString() }).eq('id', cid);
 
-    res.json({ message: mc, imageUrl: furl, enhancedPrompt: ep, messageId: sm.id, chatId: cid, timestamp: sm.timestamp });
-  } catch {
+    res.json({ 
+      message: mc, 
+      imageUrl: furl, 
+      originalPrompt: sp,
+      translatedPrompt: translatedPrompt,
+      enhancedPrompt: detailedPrompt,
+      messageId: sm.id, 
+      chatId: cid, 
+      timestamp: sm.timestamp 
+    });
+  } catch (e) {
+    console.error('Image generation error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1091,27 +1148,32 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: 'Internal server error' });
 });
 
+// ==================== SERVER START ====================
 const server = app.listen(process.env.PORT || 3001, () => {
   console.log('========================================');
   console.log(`Server running on port ${process.env.PORT || 3001}`);
   console.log('========================================');
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
-  console.log('\n🚀 SMART SEARCH DETECTION v4.4');
+  console.log('\n🚀 SINGLE MODEL v4.6');
+  console.log('   ✓ Using GLM-4.5-Air model for all operations');
   console.log('   ✓ Improved search vs chat detection');
   console.log('   ✓ No false positives for coding/knowledge');
   console.log('   ✓ Product-specific queries auto-detected');
   console.log('   ✓ Real-time/news queries auto-detected');
   console.log('   ✓ Explicit keywords supported');
+  console.log('   ✓ Enhanced image generation with translation');
   console.log('\n🎯 Detection Logic:');
   console.log('   • Explicit: "tìm kiếm:", "search:"');
   console.log('   • Products: Dell 5420, iPhone 15, etc.');
   console.log('   • Real-time: news, weather, prices');
   console.log('   • Specific facts: CEO of X, price of Y');
   console.log('   • DEFAULT: Chat mode (no search)');
-  console.log('\n📊 Model Order:');
-  console.log('   Chat: DeepSeek → Gemini → Qwen → Llama');
-  console.log('   Quick: Qwen → Gemini → DeepSeek');
-  console.log('   Research: DeepResearch → DeepSeek → Gemini');
+  console.log('\n🎨 Image Generation:');
+  console.log('   • Vietnamese to English translation');
+  console.log('   • Detailed prompt enhancement');
+  console.log('   • Art style, lighting, composition details');
+  console.log('\n📊 Model:');
+  console.log('   Single: GLM-4.5-Air');
   console.log('\n🔒 Security: Rate limiting + Helmet + CORS');
   console.log('========================================\n');
 });
