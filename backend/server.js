@@ -45,11 +45,11 @@ const geminiKeys = process.env.GEMINI_API_KEY
 
 const jwtSecret = process.env.JWT_SECRET;
 
-// STRATEGY: Using Gemini as primary model for all categories
+// STRATEGY: Using Gemini 2.0 Flash as primary model for all categories
 const AI_MODEL = {
-  id: 'gemini-1.5-flash',
+  id: 'gemini-2.0-flash',
   timeout: 60000,
-  name: 'Gemini-1.5-Flash'
+  name: 'Gemini-2.0-Flash'
 };
 
 // Fallback model for when Gemini fails
@@ -235,7 +235,7 @@ function getNextGeminiKey() {
 }
 
 // ==================== AI MODEL CALLING ====================
-// CORE: Using Gemini as primary model for all operations with fallback
+// CORE: Using Gemini 2.0 Flash as primary model for all operations with fallback
 async function callAISingleModel(msgs, cat = 'chat', opts = {}) {
   const { temperature = 0.7, maxTokens = 500 } = opts;
   
@@ -291,7 +291,7 @@ async function callGeminiModel(msgs, temperature, maxTokens) {
       parts: [{ text: msg.content }]
     }));
     
-    // Fix: Use the correct Gemini API endpoint
+    // Fix: Use the correct Gemini API endpoint for 2.0 Flash
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${AI_MODEL.id}:generateContent?key=${apiKey}`, {
       method: 'POST',
       headers: {
@@ -1399,7 +1399,7 @@ app.get('/', (req, res) => {
     strategy: 'Multi-API with Comma-Separated Keys & Enhanced Caching', 
     features: [
       'Comma-separated API keys for both Gemini and OpenRouter',
-      'Gemini-1.5-Flash as primary model',
+      'Gemini-2.0-Flash as primary model',
       'GLM-4.5-Air as fallback model',
       'Improved DuckDuckGo search',
       'Enhanced Image Generation with caching',
@@ -1787,7 +1787,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log(`Environment: ${process.env.NODE_ENV || 'production'}`);
   console.log('\n🚀 MULTI-API v5.1 - OPTIMIZED');
   console.log('   ✓ Comma-separated API keys for both Gemini and OpenRouter');
-  console.log('   ✓ Gemini-1.5-Flash as primary model');
+  console.log('   ✓ Gemini-2.0-Flash as primary model (15 RPM, 1M TPM)');
   console.log('   ✓ GLM-4.5-Air as fallback model');
   console.log('   ✓ Improved DuckDuckGo search with multiple sources');
   console.log('   ✓ Enhanced image generation with caching');
@@ -1811,7 +1811,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   • Image caching for performance');
   console.log('   • Multiple API fallbacks');
   console.log('\n📊 Models:');
-  console.log(`   Primary: ${AI_MODEL.name}`);
+  console.log(`   Primary: ${AI_MODEL.name} (15 RPM, 1M TPM, 200 RPD)`);
   console.log(`   Fallback: ${FALLBACK_MODEL.name}`);
   console.log(`   Gemini Keys: ${geminiKeys.length}`);
   console.log(`   OpenRouter Keys: ${openRouterKeys.length}`);
