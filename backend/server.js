@@ -1346,10 +1346,13 @@ async function getChatById(chatId, userId) {
 
 async function addMessage(chatId, role, content) {
   try {
+    // Ensure chatId is a string, not an object
+    const id = typeof chatId === 'string' ? chatId : chatId.id;
+    
     const { data, error } = await supabase
       .from('messages')
       .insert([{
-        chat_id: chatId,
+        chat_id: id,
         role,
         content: sanitizeInput(content),
         timestamp: new Date().toISOString()
@@ -1367,13 +1370,16 @@ async function addMessage(chatId, role, content) {
 
 async function updateChatLastMessage(chatId, lastMessage) {
   try {
+    // Ensure chatId is a string, not an object
+    const id = typeof chatId === 'string' ? chatId : chatId.id;
+    
     const { error } = await supabase
       .from('chats')
       .update({
         last_message: sanitizeInput(lastMessage).substring(0, 100),
         updated_at: new Date().toISOString()
       })
-      .eq('id', chatId);
+      .eq('id', id);
     
     if (error) throw error;
     return true;
