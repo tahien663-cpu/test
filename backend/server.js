@@ -58,11 +58,76 @@ const FALLBACK_MODEL = {
   name: 'Gemini-1.5-Flash'
 };
 
+// Image generation models configuration
+const IMAGE_MODELS = {
+  primary: {
+    name: 'stability-ai/stable-diffusion-xl',
+    api: 'openrouter',
+    width: 1024,
+    height: 1024,
+    steps: 30,
+    guidance_scale: 7.5,
+    timeout: 60000
+  },
+  fallback: {
+    name: 'dall-e-3',
+    api: 'openai',
+    width: 1024,
+    height: 1024,
+    quality: 'hd',
+    timeout: 60000
+  }
+};
+
 // ==================== MODEL MANAGEMENT ====================
 const modelStats = new Map();
 const rateLimitTracker = new Map();
 const currentOpenRouterKeyIndex = { value: 0 };
 const currentGeminiKeyIndex = { value: 0 };
+
+// Image cache for performance
+const imageCache = new Map();
+const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// Generate a cache key from the prompt
+function getCacheKey(prompt) {
+  let hash = 0;
+  for (let i = 0; i < prompt.length; i++) {
+    const char = prompt.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return hash.toString();
+}
+
+// Check if image is in cache
+function getCachedImage(prompt) {
+  const key = getCacheKey(prompt);
+  const cached = imageCache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached;
+  }
+  return null;
+}
+
+// Store image in cache
+function cacheImage(prompt, imageUrl) {
+  const key = getCacheKey(prompt);
+  imageCache.set(key, {
+    url: imageUrl,
+    timestamp: Date.now()
+  });
+  
+  // Clean up old cache entries periodically
+  if (imageCache.size > 100) {
+    const now = Date.now();
+    for (const [k, v] of imageCache.entries()) {
+      if (now - v.timestamp > CACHE_TTL) {
+        imageCache.delete(k);
+      }
+    }
+  }
+}
 
 function initModelStats() {
   modelStats.set(AI_MODEL.id, { successCount: 0, failCount: 0, lastUsed: null, rateLimitCount: 0 });
@@ -934,34 +999,36 @@ Max 600 words.`;
   }
 }
 
-// ==================== IMAGE GENERATION ====================
+// ==================== IMPROVED IMAGE GENERATION ====================
 async function generateDetailedImagePrompt(userPrompt) {
   try {
     const isVN = /[àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíĩỉịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]/i.test(userPrompt);
     
     const sysPrompt = isVN 
-      ? `Bạn là một chuyên gia về nghệ thuật và hình ảnh. Hãy tạo ra một prompt chi tiết cho việc tạo hình ảnh.
+      ? `Bạn là một chuyên gia về nghệ thuật và hình ảnh. Tạo prompt chi tiết cho việc tạo hình ảnh chất lượng cao.
       
-Hãy phân tích yêu cầu của người dùng và tạo ra một prompt chi tiết bao gồm:
-1. Chủ đề chính (main subject)
-2. Phong cách nghệ thuật (art style)
-3. Ánh sáng (lighting)
-4. Bố cục (composition)
-5. Màu sắc (color palette)
-6. Chi tiết bổ sung (additional details)
+Phân tích yêu cầu và tạo prompt bao gồm:
+1. Chủ thể chính (main subject) - mô tả chi tiết
+2. Phong cách nghệ thuật (art style) - ví dụ: photorealistic, digital art, oil painting, etc.
+3. Ánh sáng (lighting) - ví dụ: cinematic lighting, soft light, golden hour, etc.
+4. Bố cục (composition) - ví dụ: close-up, wide angle, rule of thirds, etc.
+5. Màu sắc (color palette) - ví dụ: vibrant colors, monochromatic, warm tones, etc.
+6. Chi tiết bổ sung (additional details) - ví dụ: textures, background, atmosphere
+7. Chất lượng (quality) - thêm "highly detailed, 8k, masterpiece"
 
-Prompt phải bằng tiếng Anh, không quá 200 từ, và chỉ trả về prompt, không giải thích.`
-      : `You are an art and image expert. Create a detailed prompt for image generation.
+Prompt phải bằng tiếng Anh, không quá 150 từ, chỉ trả về prompt, không giải thích.`
+      : `You are an art and image expert. Create a detailed prompt for high-quality image generation.
       
-Analyze the user's request and create a detailed prompt including:
-1. Main subject
-2. Art style
-3. Lighting
-4. Composition
-5. Color palette
-6. Additional details
+Analyze the request and create a detailed prompt including:
+1. Main subject - detailed description
+2. Art style - e.g., photorealistic, digital art, oil painting, etc.
+3. Lighting - e.g., cinematic lighting, soft light, golden hour, etc.
+4. Composition - e.g., close-up, wide angle, rule of thirds, etc.
+5. Color palette - e.g., vibrant colors, monochromatic, warm tones, etc.
+6. Additional details - e.g., textures, background, atmosphere
+7. Quality - add "highly detailed, 8k, masterpiece"
 
-The prompt must be in English, no more than 200 words, and only return the prompt, no explanation.`;
+The prompt must be in English, no more than 150 words, and only return the prompt, no explanation.`;
 
     const r = await callAISingleModel([
       { role: 'system', content: sysPrompt },
@@ -993,19 +1060,101 @@ async function translateToEnglish(text) {
   }
 }
 
-async function verifyImage(url) {
-  await new Promise(r => setTimeout(r, 2000));
-  for (let i = 1; i <= 3; i++) {
-    try {
-      const ctrl = new AbortController();
-      const to = setTimeout(() => ctrl.abort(), 2000);
-      const r = await fetch(url, { method: 'HEAD', signal: ctrl.signal });
-      clearTimeout(to);
-      if (r.ok && r.headers.get('content-type')?.startsWith('image/')) return { success: true, attempts: i };
-    } catch { }
-    if (i < 3) await new Promise(r => setTimeout(r, 800));
+// Improved image generation with multiple APIs
+async function generateImageWithAPI(prompt, model) {
+  if (model.api === 'openrouter') {
+    return await generateImageWithOpenRouter(prompt, model);
+  } else if (model.api === 'openai') {
+    return await generateImageWithOpenAI(prompt, model);
+  } else {
+    throw new Error(`Unknown image API: ${model.api}`);
   }
-  return { success: false, attempts: 3 };
+}
+
+async function generateImageWithOpenRouter(prompt, model) {
+  const apiKey = getNextOpenRouterKey();
+  if (!apiKey) throw new Error('No OpenRouter API keys available');
+  
+  const t0 = Date.now();
+  const ctrl = new AbortController();
+  const to = setTimeout(() => ctrl.abort(), model.timeout);
+  
+  try {
+    console.log(`🎨 Generating image with ${model.name}...`);
+    
+    const r = await fetch('https://openrouter.ai/api/v1/images/generations', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://hein1.onrender.com',
+        'X-Title': 'Hein AI'
+      },
+      body: JSON.stringify({
+        model: model.name,
+        prompt: prompt,
+        response_format: 'url',
+        width: model.width,
+        height: model.height,
+        steps: model.steps,
+        guidance_scale: model.guidance_scale
+      }),
+      signal: ctrl.signal
+    });
+    
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (!r.ok) {
+      const err = await r.text().catch(() => '');
+      console.log(`   ❌ Image generation failed (${r.status}) in ${dt}ms`);
+      throw new Error(`Image generation failed with status ${r.status}`);
+    }
+    
+    const data = await r.json();
+    const imageUrl = data.data?.[0]?.url;
+    
+    if (!imageUrl) {
+      console.log(`   ❌ No image URL returned`);
+      throw new Error('No image URL returned');
+    }
+    
+    console.log(`   ✅ Image generated in ${dt}ms`);
+    return { imageUrl, model: model.name, responseTime: dt };
+    
+  } catch (e) {
+    clearTimeout(to);
+    const dt = Date.now() - t0;
+    
+    if (e.name === 'AbortError') {
+      console.log(`   ⏱️  Image generation timeout after ${dt}ms`);
+      throw new Error('Image generation timed out');
+    } else {
+      console.log(`   ❌ Image generation error: ${e.message}`);
+      throw e;
+    }
+  }
+}
+
+async function generateImageWithOpenAI(prompt, model) {
+  // This would require an OpenAI API key
+  // Implementation depends on your OpenAI setup
+  throw new Error('OpenAI image generation not implemented');
+}
+
+// Fallback to Pollinations if primary APIs fail
+async function generateImageWithPollinations(prompt) {
+  console.log('🎨 Using fallback Pollinations API...');
+  const eqp = encodeURIComponent(prompt);
+  const iurl = `https://image.pollinations.ai/prompt/${eqp}?width=1024&height=1024&nologo=true&seed=${Math.floor(Math.random() * 1000000)}`;
+
+  const ir = await fetch(iurl, { method: 'GET', headers: { 'Accept': 'image/*' } });
+  if (!ir.ok) throw new Error('Pollinations image generation failed');
+
+  const ct = ir.headers.get('content-type');
+  if (!ct || !ct.startsWith('image/')) throw new Error('Invalid image response');
+
+  return { imageUrl: iurl, model: 'Pollinations', responseTime: 0 };
 }
 
 // ==================== MIDDLEWARE ====================
@@ -1059,7 +1208,7 @@ app.get('/', (req, res) => {
       'Comma-separated API keys for both OpenRouter and Gemini',
       'Gemini-1.5-Flash fallback model',
       'Improved DuckDuckGo search',
-      'Enhanced Image Generation'
+      'Enhanced Image Generation with caching'
     ] 
   });
 });
@@ -1089,7 +1238,8 @@ app.get('/api/model-stats', (req, res) => {
     stats, 
     strategy: 'Comma-separated API keys for both OpenRouter and Gemini',
     openRouterKeys: openRouterKeys.length,
-    geminiKeys: geminiKeys.length
+    geminiKeys: geminiKeys.length,
+    imageCacheSize: imageCache.size
   });
 });
 
@@ -1231,6 +1381,7 @@ app.post('/api/chat', authenticateToken, async (req, res) => {
   }
 });
 
+// Optimized image generation endpoint
 app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res) => {
   try {
     const { prompt, chatId } = req.body;
@@ -1241,6 +1392,42 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     const uid = req.user.id;
     let cid = chatId;
 
+    // Check cache first
+    const cachedImage = getCachedImage(sp);
+    if (cachedImage) {
+      console.log('🎨 Using cached image');
+      
+      // Create chat if needed
+      if (!cid) {
+        const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: `Image: ${sp.substring(0, 40)}` }]).select().single();
+        if (error) return res.status(500).json({ error: 'Failed to create chat' });
+        cid = c.id;
+      } else {
+        const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
+        if (!c) return res.status(404).json({ error: 'Chat not found' });
+      }
+
+      await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
+      
+      const mc = `![Image](${cachedImage.url})\n\n**Prompt:** ${sp}\n\n*Cached image*`;
+      
+      const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
+      if (me) return res.status(500).json({ error: 'Failed to save' });
+
+      await supabase.from('chats').update({ last_message: `Image: ${sp.substring(0, 50)}`, updated_at: new Date().toISOString() }).eq('id', cid);
+
+      return res.json({ 
+        message: mc, 
+        imageUrl: cachedImage.url, 
+        originalPrompt: sp,
+        messageId: sm.id, 
+        chatId: cid, 
+        timestamp: sm.timestamp,
+        cached: true
+      });
+    }
+
+    // Create chat if needed
     if (!cid) {
       const { data: c, error } = await supabase.from('chats').insert([{ user_id: uid, title: `Image: ${sp.substring(0, 40)}` }]).select().single();
       if (error) return res.status(500).json({ error: 'Failed to create chat' });
@@ -1248,7 +1435,6 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     } else {
       const { data: c } = await supabase.from('chats').select('id').eq('id', cid).eq('user_id', uid).maybeSingle();
       if (!c) return res.status(404).json({ error: 'Chat not found' });
-      cid = c.id;
     }
 
     await supabase.from('messages').insert([{ chat_id: cid, role: 'user', content: sp, timestamp: new Date().toISOString() }]);
@@ -1263,32 +1449,50 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
     console.log('🎨 Generating detailed image prompt...');
     const detailedPrompt = await generateDetailedImagePrompt(translatedPrompt);
     
-    // Step 3: Generate image
-    console.log('🖼️ Generating image...');
-    const eqp = encodeURIComponent(detailedPrompt);
-    const iurl = `https://image.pollinations.ai/prompt/${eqp}?width=1024&height=1024&nologo=true`;
-
-    const ir = await fetch(iurl, { method: 'GET', headers: { 'Accept': 'image/*' } });
-    if (!ir.ok) return res.status(500).json({ error: 'Image generation failed' });
-
-    const ct = ir.headers.get('content-type');
-    if (!ct || !ct.startsWith('image/')) return res.status(500).json({ error: 'Invalid image response' });
-
-    const buf = await ir.buffer();
-    const iid = uuidv4();
-    let furl = iurl;
-
-    const { error: se } = await supabase.storage.from('images').upload(`public/${iid}.png`, buf, { contentType: ct, upsert: true });
-    if (!se) {
-      const { data: sd } = await supabase.storage.from('images').createSignedUrl(`public/${iid}.png`, 86400);
-      if (sd?.signedUrl) furl = sd.signedUrl;
+    // Step 3: Generate image with primary API
+    let imageResult;
+    try {
+      imageResult = await generateImageWithAPI(detailedPrompt, IMAGE_MODELS.primary);
+    } catch (e) {
+      console.log(`Primary image API failed: ${e.message}`);
+      try {
+        // Try fallback API
+        imageResult = await generateImageWithAPI(detailedPrompt, IMAGE_MODELS.fallback);
+      } catch (e2) {
+        console.log(`Fallback image API failed: ${e2.message}`);
+        // Use Pollinations as last resort
+        imageResult = await generateImageWithPollinations(detailedPrompt);
+      }
     }
+    
+    // Step 4: Store image in Supabase
+    let furl = imageResult.imageUrl;
+    
+    // If the URL is from Pollinations, we need to fetch and store the image
+    if (imageResult.model === 'Pollinations') {
+      const ir = await fetch(imageResult.imageUrl, { method: 'GET', headers: { 'Accept': 'image/*' } });
+      if (!ir.ok) return res.status(500).json({ error: 'Image generation failed' });
 
-    const v = await verifyImage(furl);
+      const ct = ir.headers.get('content-type');
+      if (!ct || !ct.startsWith('image/')) return res.status(500).json({ error: 'Invalid image response' });
+
+      const buf = await ir.buffer();
+      const iid = uuidv4();
+
+      const { error: se } = await supabase.storage.from('images').upload(`public/${iid}.png`, buf, { contentType: ct, upsert: true });
+      if (!se) {
+        const { data: sd } = await supabase.storage.from('images').createSignedUrl(`public/${iid}.png`, 86400);
+        if (sd?.signedUrl) furl = sd.signedUrl;
+      }
+    }
+    
+    // Cache the image
+    cacheImage(sp, furl);
+    
     const dt = ((Date.now() - t0) / 1000).toFixed(2);
     
     // Create detailed message with all steps
-    const mc = `![Image](${furl})\n\n**Original Prompt:** ${sp}\n**Translated:** ${translatedPrompt}\n**Enhanced:** ${detailedPrompt}\n\n*Generation time: ${dt}s ${v.success ? '(verified)' : ''}*`;
+    const mc = `![Image](${furl})\n\n**Original Prompt:** ${sp}\n**Translated:** ${translatedPrompt}\n**Enhanced:** ${detailedPrompt}\n\n*Generated with ${imageResult.model} in ${dt}s*`;
 
     const { data: sm, error: me } = await supabase.from('messages').insert([{ chat_id: cid, role: 'ai', content: mc, timestamp: new Date().toISOString() }]).select().single();
     if (me) return res.status(500).json({ error: 'Failed to save' });
@@ -1303,7 +1507,9 @@ app.post('/api/generate-image', authenticateToken, imageLimiter, async (req, res
       enhancedPrompt: detailedPrompt,
       messageId: sm.id, 
       chatId: cid, 
-      timestamp: sm.timestamp 
+      timestamp: sm.timestamp,
+      model: imageResult.model,
+      cached: false
     });
   } catch (e) {
     console.error('Image generation error:', e);
@@ -1388,7 +1594,7 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   ✓ Comma-separated API keys for both OpenRouter and Gemini');
   console.log('   ✓ Gemini-1.5-Flash fallback model');
   console.log('   ✓ Improved DuckDuckGo search with multiple sources');
-  console.log('   ✓ Enhanced image generation with translation');
+  console.log('   ✓ Enhanced image generation with caching');
   console.log('\n🎯 Detection Logic:');
   console.log('   • Explicit: "tìm kiếm:", "search:"');
   console.log('   • Products: Dell 5420, iPhone 15, etc.');
@@ -1403,6 +1609,8 @@ const server = app.listen(process.env.PORT || 3001, () => {
   console.log('   • Vietnamese to English translation');
   console.log('   • Detailed prompt enhancement');
   console.log('   • Art style, lighting, composition details');
+  console.log('   • Image caching for performance');
+  console.log('   • Multiple API fallbacks');
   console.log('\n📊 Models:');
   console.log(`   Primary: ${AI_MODEL.name}`);
   console.log(`   Fallback: ${FALLBACK_MODEL.name}`);
